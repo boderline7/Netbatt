@@ -1,0 +1,6 @@
+id=netbatt
+name=NetBatt - 热点网段 / 电量控制
+version=v2.1.0
+versionCode=210
+author=local
+description=内置特权应用 NetBatt Console（TETHER_PRIVILEGED）可一键开关热点；统一热点/USB共享网段(默认192.168.8.x)、网页查看连接设备与IP、按阈值控制充电。控制台: http://127.0.0.1:8080

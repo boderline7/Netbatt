@@ -1,0 +1,10 @@
+sdk/
+probe/
+.screenshots/
+
+apk/build/
+apk/nb.keystore
+apk/build/*.idsig
+
+*.log
+*.tmp

@@ -123,7 +123,14 @@ if [ -n "$POOL_START" ] && [ -n "$POOL_END" ] && [ "$POOL_END" -le "$POOL_START"
   $BB sed -i "s/^POOL_END=.*/POOL_END=$POOL_END/" "$CFG" 2>/dev/null
 fi
 
-GW="$PREFIX.1"
+# v3.1.2 把采样间隔默认值从 30 秒收紧到 15 秒。v3.1.1 会把 SAMPLE_INT=30 写进 config，
+# 而「已有键不改」的补默认值逻辑会把它保留下来，导致升级后采样还是 30 秒。
+# 用独立 seed 标记：只在「还是上一版默认值 30」时纠正一次，用户自己改过的照旧。
+if ! $BB grep -q '^CFG_SAMPLE_SEED=' "$CFG" 2>/dev/null; then
+  [ "$SAMPLE_INT" = "30" ] && $BB sed -i 's/^SAMPLE_INT=.*/SAMPLE_INT=15/' "$CFG" 2>/dev/null
+  echo "CFG_SAMPLE_SEED=1" >> "$CFG"
+fi
+. "$CFG"
 
 # ---------- 运行日志 ----------
 # 车机上没法 adb 也导不出 logcat，模块自己落一份到 /data/adb/netbatt。
@@ -426,6 +433,13 @@ apply() {
   # 3) 没有下游接口
   if [ "$(ap_running)" = 1 ]; then
     date +%s > "$DATA/yield.ts" 2>/dev/null
+    # 热点开着时顺带确认系统 DHCP 是否在热点接口上服务——没服务的话，
+    # 连上来的设备拿不到地址，就是「热点开着但没网」的直接原因。
+    if ap_dhcp_on; then
+      log_chg apdhcp "on" "热点: DHCP 由系统服务（接口 $(ap_iface)）"
+    else
+      log_chg apdhcp "off" "热点: 系统 DHCP 未在 $(ap_iface) 上服务，连入设备可能拿不到地址"
+    fi
     stop_dnsmasq
   elif sys_dhcp_any "$USBDS"; then
     # 系统 tethering 已接管：这是「有服务」而不是「端口被占所以判断失败」，记下来
@@ -884,6 +898,13 @@ ap_down() { ap_is_up && return 1; return 0; }
 sys_dhcp_on() {
   [ -n "$1" ] || return 1
   ss -lunp 2>/dev/null | $BB grep -F "0.0.0.0%$1:67" | $BB grep -q 'system_server'
+}
+
+# 热点接口上系统是否在发 DHCP。热点开着但设备连上没网，先查这个：
+# system_server 没在 ap 接口绑 67，说明系统热点的地址分配根本没起来。
+ap_dhcp_on() {
+  a=$(ap_iface) || return 1
+  ss -lunp 2>/dev/null | $BB grep -F "0.0.0.0%$a:67" | $BB grep -q 'system_server'
 }
 
 # 给定的接口集合里有没有系统 DHCP 在服务（默认查全部 USB 接口）
@@ -1402,7 +1423,13 @@ usb_dhcp_tick() {
 
 # 永久保活：被系统关掉就重新拉起
 keepalive() {
-  [ "$KEEP_WIFI" = 1 ] && [ "$(ap_running)" = 0 ] && hs wifi 1
+  if [ "$KEEP_WIFI" = 1 ] && [ "$(ap_running)" = 0 ]; then
+    # 热点掉线诊断：记下当时的上下文，方便判断是系统主动关的、还是上行断了
+    # 单 WiFi 通道机型开热点会让 wlan0 掉线，若又没有蜂窝数据，热点下的设备全都上不了网。
+    log_chg apdrop "$(uplink_state):$(usb_online):$(getprop sys.usb.config)" \
+      "热点: 检测到已关闭，保活重新拉起（上行 $(uplink_state) USB $(usb_online) config=$(getprop sys.usb.config)）"
+    hs wifi 1
+  fi
   if [ "$KEEP_USB" = 1 ] && [ "$(usb_online)" = 1 ] && [ "$(usb_off_flag)" = 0 ]; then
     # native 模式由系统自己维持，模块插手重建 gadget 只会打断它的 tethering
     [ "$USB_NATIVE" = 1 ] && return 0

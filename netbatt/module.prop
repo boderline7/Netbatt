@@ -1,6 +1,6 @@
 id=netbatt
 name=NetBatt - 热点网段 / 电量控制
-version=v3.1.2
-versionCode=312
+version=v3.1.3
+versionCode=313
 author=local
 description=内置特权应用 NetBatt Console（TETHER_PRIVILEGED）可一键开关热点；网页查看连接设备与IP、按阈值控制充电、可设端口转发。充电通道自动识别：高通走开关节点(input_suspend)，天玑/vivo 走目标电量节点(keep_chg_soc)。USB 共享默认交给系统 tethering（实测直接改 sys.usb.config 在 vivo 上只建目录不链接，对端看不到网卡），失败才回退自建。无线 ADB 开关只写运行时属性，不碰 persist，不影响开发者选项；占用 67 端口的 DHCP 接管默认关闭，不会再为发地址把热点关掉。自带运行日志，3MB 滚动，30 秒周期采样充放电曲线，网页可看可一键导出到 Download 目录。控制台地址见页面顶部（USB 共享与热点各一个）

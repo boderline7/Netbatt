@@ -132,6 +132,11 @@ if ! $BB grep -q '^CFG_SAMPLE_SEED=' "$CFG" 2>/dev/null; then
 fi
 . "$CFG"
 
+# 网关地址必须在这里初始化。GW 只在 set_net（用户改网段）里赋值，
+# 启动路径从未给过初值，导致 dnsmasq 的 -O "3,$GW"、ip addr add "$GW/24"
+# 全都传空串——日志里「网关 」为空、dnsmasq 发不出能用的租约就是它。
+GW="$PREFIX.1"
+
 # ---------- 运行日志 ----------
 # 车机上没法 adb 也导不出 logcat，模块自己落一份到 /data/adb/netbatt。
 # 单文件到 LOG_MAX（默认 3MB）就滚成 netbatt.log.1，只保留一份历史，
@@ -902,18 +907,22 @@ ap_is_up() {
 
 ap_down() { ap_is_up && return 1; return 0; }
 
-# 系统 tethering 是否已在某个接口上提供 DHCP：绑定形式为 0.0.0.0%<iface>:67，
-# 持有者是 system_server。命中说明系统自己把这条链路服务得很好，模块必须让位。
+# 系统 tethering 是否已在某个接口上提供 DHCP。持有者实测有两种：
+#   热点：system_server 绑 0.0.0.0%ap0:67（带 SO_BINDTODEVICE）
+#   USB：netd 拉起 /system/bin/dnsmasq，绑通配 0.0.0.0:67
+# 只要 67 在这个接口上有进程在服务，就说明系统自己把链路服务好了，模块必须让位。
+# 老版只认 system_server + 精确的 %<iface>:67，漏掉了 dnsmasq 形式，导致系统其实在
+# 服务、模块却跑去自建，dnsmasq bind 失败刷「Address already in use」。
 sys_dhcp_on() {
   [ -n "$1" ] || return 1
-  ss -lunp 2>/dev/null | $BB grep -F "0.0.0.0%$1:67" | $BB grep -q 'system_server'
+  ss -lunp 2>/dev/null | $BB grep -F "$1" | $BB grep -qE ':67\b.*(system_server|dnsmasq)'
 }
 
 # 热点接口上系统是否在发 DHCP。热点开着但设备连上没网，先查这个：
-# system_server 没在 ap 接口绑 67，说明系统热点的地址分配根本没起来。
+# 系统热点 DHCP 的持有者同样是 system_server 或 dnsmasq 两种之一。
 ap_dhcp_on() {
   a=$(ap_iface) || return 1
-  ss -lunp 2>/dev/null | $BB grep -F "0.0.0.0%$a:67" | $BB grep -q 'system_server'
+  ss -lunp 2>/dev/null | $BB grep -F "$a" | $BB grep -qE ':67\b.*(system_server|dnsmasq)'
 }
 
 # 给定的接口集合里有没有系统 DHCP 在服务（默认查全部 USB 接口）

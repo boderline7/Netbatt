@@ -130,6 +130,15 @@ UNCONN  0  0  0.0.0.0%ap0:67  0.0.0.0:*  users:(("system_server",pid=1439,fd=681
 2. `hs` 开热点前不再 `stop_dnsmasq; sleep 1`——那一步正是「先杀系统热点 DHCP 再请求开热点」。
 3. `apply` 在无 USB 下游接口时直接跳过自建，不再走 `sync_dnsmasq ""`（其内部会触发 stop）。
 
+### v3.1.5：修车机拿不到 IP
+
+热点稳住之后，车机仍连不上。日志里抓到两个：
+
+1. **`网关 ` 是空的**：`GW` 变量只在 `set_net`（用户改网段）里赋值，启动路径从未初始化，导致 dnsmasq 的 `-O "3,$GW"`、`ip addr add "$GW/24"` 全都传空串。即使 dnsmasq 起了，下发的网关也是空，车机拿到 IP 也上不了网。已在 `. "$CFG"` 后补 `GW="$PREFIX.1"`。
+2. **`Address already in use` 却仍自建**：系统 tethering 的 USB DHCP 持有者是 `dnsmasq`（netd 拉起），不是 `system_server`；老版 `sys_dhcp_on` 只认 `system_server` 绑 `%<iface>:67`，漏掉了这种形式，导致系统明明在服务、模块却跑去自建，dnsmasq bind 失败反复刷屏。已放宽为「67 在该接口上有 system_server 或 dnsmasq 任一进程服务即让位」。
+
+页面「网络状态」卡片也加了独立刷新按钮，连接状态这块单独 2 秒刷一次，不跟着整页 3 秒节奏走，车机插拔、设备上下线能更快反映。
+
 ## 成功怎么判定：三层，以 ACK 为准
 
 把「ARP 出现」当成「地址分配成功」是不成立的。ARP 只说明邻居表里有解析记录，不能证明 `DISCOVER → OFFER → REQUEST → ACK` 走完了。而且 `/proc/net/arp` 的 Flags 只有 `0x0/0x2` 两态，**没有** NUD 的 REACHABLE/STALE——要看那个状态必须读 `ip neigh`。

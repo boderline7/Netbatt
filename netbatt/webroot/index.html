@@ -175,7 +175,7 @@ td.name{font-family:inherit}
 </div>
 
 <section class="card">
-  <div class="mh"><h2>网络状态</h2></div>
+  <div class="mh"><h2>网络状态</h2><button class="tag" id="netRefresh">刷新</button></div>
   <div class="stat">
     <span class="sd" id="s1d"></span>
     <div class="sm">
@@ -666,6 +666,13 @@ async function refresh(){
   catch(e){ console.warn(e); }
 }
 
+// 只刷「网络状态」这一块，不碰其他卡片。连接状态变化快（车机插拔、热点
+// 开关、设备上下线），单独刷这一块既快又不打断正在看的电量/转发设置。
+async function refreshNet(){
+  try{ renderNet(await api('status')); }
+  catch(e){ console.warn(e); }
+}
+
 function clampPair(){
   let p=+$('#pcap').value, r=+$('#rcap').value;
   if(r>=p){ r=p-1; $('#rcap').value=r; }
@@ -825,11 +832,13 @@ $('#logClear').addEventListener('click', async ()=>{
 });
 
 $('#hardReload').addEventListener('click', hardReload);
+$('#netRefresh').addEventListener('click', ()=>{ refreshNet(); toast('网络状态已刷新'); });
 paint('#pcap','#pcapv');
 paint('#rcap','#rcapv');
 refresh();
 loadLog();
 setInterval(refresh, 3000);
+setInterval(()=>{ if(!document.hidden) refreshNet(); }, 2000);
 setInterval(()=>{ if(!document.hidden) loadLog(); }, 15000);
 </script>
 </body>

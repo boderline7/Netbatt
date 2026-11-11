@@ -111,6 +111,11 @@ case "$a" in
     fi
     echo '{"ok":1,"code":'"$(adb_tcp_code)"',"port":"$(getprop service.adb.tcp.port)"}'
     ;;
+  adbboot)
+    v=$(get on); [ "$v" = "1" ] || v=0
+    adb_boot_set "$v"
+    echo '{"ok":1,"boot":'"$v"'}'
+    ;;
   clearpersist)
     if adb_persist_clear; then echo '{"ok":1}'; else echo '{"ok":0,"error":"failed"}'; fi
     ;;

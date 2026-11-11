@@ -47,6 +47,9 @@ USB_NATIVE=1
 # 绝不写 persist.adb.tcp.port —— 那条属性会让 vivo 的开发者选项直接进不去
 ADB_TCP=0
 ADB_PORT=5555
+# 开机是否自动恢复无线 ADB。开机后等 adbd 起来再延迟几秒设置，
+# 太早设会被 init 覆盖，面板会显示"已配置，未监听"
+ADB_BOOT=1
 # 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
 LOG_MAX=3145728
 
@@ -74,6 +77,7 @@ USB_NET=$USB_NET
 USB_NATIVE=$USB_NATIVE
 ADB_TCP=$ADB_TCP
 ADB_PORT=$ADB_PORT
+ADB_BOOT=$ADB_BOOT
 LOG_MAX=$LOG_MAX
 EOC
 fi
@@ -89,7 +93,7 @@ EOC
 fi
 
 # 升级上来的老配置缺新键时补默认值；已有的键一律不动
-for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "LOG_MAX=3145728"; do
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "LOG_MAX=3145728"; do
   $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
 done
 
@@ -1297,6 +1301,19 @@ adb_tcp_off() {
   return 0
 }
 
+# 开机自启开关：只影响下次开机的恢复动作，不动当前这次监听
+adb_boot_set() {
+  v="$1"; [ "$v" = "1" ] || v=0
+  cfg_set ADB_BOOT "$v"
+  ADB_BOOT="$v"
+  if [ "$v" = "1" ]; then
+    log "无线 ADB: 开机自启已开"
+  else
+    log "无线 ADB: 开机自启已关"
+  fi
+  return 0
+}
+
 # 老模块（adb_tcp_5555）把 5555 写进了 persist 分区，禁用模块不会清掉它，
 # 开发者在选项页读到非空就直接拒绝进入。属性文件和内存属性都要清，
 # 只删内存的话重启会从 /data/property 里读回来。
@@ -1318,8 +1335,11 @@ adb_persist_clear() {
 
 # 开机恢复：等 adbd 真起来再改端口，太早设会被 init 覆盖
 adb_tcp_restore() {
+  [ "$ADB_BOOT" = 1 ] || return 0
   [ "$ADB_TCP" = 1 ] || return 0
   wait_for 40 adbd_running
+  # 起来之后再让几秒：adbd 刚 ready 时设端口，偶尔会被 init 的默认值盖回去
+  $BB sleep 5 2>/dev/null || sleep 5
   if adb_tcp_on "$ADB_PORT" >/dev/null 2>&1; then
     log "无线 ADB: 开机恢复端口 $ADB_PORT 成功"
   else
@@ -1330,6 +1350,15 @@ adb_tcp_restore() {
 # 控制台地址：热点开着时用热点接口的真实 IP。
 # 系统热点的网段由 TetheringManager 自己选（实测 vivo 选了 192.168.138.x），
 # 跟模块设的 192.168.8.x 不是一回事，写死 $GW 会让连上热点的人打不开页面。
+# 手机连路由器时的局域网地址：同网段的电脑可以直接连
+wlan_ip() {
+  for i in wlan0 wlan1; do
+    ip4=$(ip -o -4 addr show dev "$i" 2>/dev/null | $BB awk '$4 !~ /^127\./ {print $4; exit}' | $BB cut -d/ -f1)
+    [ -n "$ip4" ] && { echo "$ip4"; return 0; }
+  done
+  return 1
+}
+
 web_url() {
   a=$(ap_iface)
   if [ -n "$a" ]; then
@@ -1342,7 +1371,11 @@ web_url() {
     ip4=$(ip -o -4 addr show dev "$i" 2>/dev/null | $BB awk '{print $4}' | $BB cut -d/ -f1)
     [ -n "$ip4" ] && { echo "http://$ip4:$PORT"; return; }
   done
-  echo "http://$GW:$PORT"
+  # 连路由器时，同一局域网的电脑用 wlan0 的地址
+  ip4=$(wlan_ip)
+  [ -n "$ip4" ] && { echo "http://$ip4:$PORT"; return; }
+  # 什么都没共享：不要编一个 8.1 出来，那个地址此时根本不存在
+  echo ""
 }
 
 status_json() {
@@ -1375,7 +1408,7 @@ status_json() {
 "batt":$(batt_json),"ap":$(ap_running),
 "usb":$(usb_up),"usb_online":$(usb_online),"keep_wifi":$KEEP_WIFI,"keep_usb":$KEEP_USB,
 "usb_func":"$(usb_net_pick)","usb_net_cfg":"$USB_NET","usb_native":$USB_NATIVE,"usb_linked":$(usb_func_linked),"usb_mode":"$( [ -n "$(usb_ifaces 2>/dev/null)" ] && $BB cat "$DATA/usb.mode" 2>/dev/null | $BB tr -d '\n' )",
-"adb_tcp":$(adb_tcp_code),"adb_port":"$(getprop service.adb.tcp.port)","adb_persist":"$(getprop persist.adb.tcp.port)",
+"adb_tcp":$(adb_tcp_code),"adb_port":"$(getprop service.adb.tcp.port)","adb_boot":$ADB_BOOT,"adb_persist":"$(getprop persist.adb.tcp.port)",
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
 "usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",

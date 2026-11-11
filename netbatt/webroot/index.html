@@ -13,6 +13,7 @@
   --acc:#3ddc84; --warn:#f5a524; --bad:#f0506e; --blue:#4c8dff;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:focus{outline:none}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:15px/1.5 -apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
   padding:14px 12px 36px;max-width:640px;margin:0 auto}
@@ -39,16 +40,21 @@ header{position:relative;display:flex;align-items:center;justify-content:space-b
 .pop .pfoot{font-size:12px;color:var(--dim);margin-top:6px;padding-top:7px;border-top:1px solid #202832;
   word-break:break-all}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
-.card h2{font-size:12.5px;color:var(--dim);font-weight:600;letter-spacing:.06em;margin:0;
-  text-transform:uppercase}
+.card h2{font-size:12.5px;color:var(--dim);font-weight:600;letter-spacing:.04em;margin:0;
+  text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row{display:flex;align-items:center}
 .row > * + *{margin-left:10px}
 input[type=text]{width:100%;background:#0e1216;border:1px solid var(--line);color:var(--fg);
   border-radius:9px;padding:9px 12px;font-size:15px;font-family:ui-monospace,Consolas,monospace}
 input[type=text]:focus{outline:none;border-color:var(--blue)}
-button{background:#222b36;color:var(--fg);border:1px solid var(--line);border-radius:9px;
-  padding:9px 13px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit}
-button:active{transform:scale(.97)}
+button{background:#222b36;color:var(--fg);border:1px solid #2f3946;border-radius:9px;
+  padding:9px 13px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit;
+  -webkit-appearance:none;appearance:none;outline:none;
+  transition:background .15s,border-color .15s,transform .1s,color .15s;
+  -webkit-user-select:none;user-select:none}
+/* WebView 会在按住/聚焦时画一圈方框，很难看，全部关掉，改用背景和缩放做反馈 */
+button:focus,button:focus-visible,button:active{outline:none}
+button:active{transform:scale(.96);background:#2b3542;border-color:#3b4757}
 button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
 button.ghost{background:transparent}
 button.danger{color:var(--bad)}
@@ -60,16 +66,22 @@ button:disabled:active{transform:none}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
 .grid2 > .card{margin:0}
 .mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-.tag{font-size:12px;padding:3px 9px;border-radius:20px;background:#1b222b;border:1px solid var(--line);
-  color:var(--dim);font-weight:500}
-.tag.on{background:#14301f;border-color:var(--acc);color:var(--acc)}
+.tag{font-size:11.5px;padding:5px 9px;border-radius:20px;background:#1e2733;border:1px solid #303b4a;
+  color:#c3cede;font-weight:500;display:inline-flex;align-items:center;line-height:1.1;
+  white-space:nowrap;flex:0 0 auto}
+/* 状态圆点：灰=关，绿=开，一眼能看出这是可点的开关 */
+.tag::before{content:"";width:6px;height:6px;border-radius:50%;background:#5b6779;
+  margin-right:6px;flex:0 0 auto}
+.tag.on{background:#14301f;border-color:#2f6b47;color:var(--acc)}
+.tag.on::before{background:var(--acc);box-shadow:0 0 6px #3ddc8488}
+.tag:active{transform:scale(.95)}
 .big{font-size:19px;font-weight:600;margin-bottom:10px}
 .btns2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .btns2 button{padding:8px 6px;font-size:13.5px}
 .btns3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
 .btns3 button{padding:8px 4px;font-size:13px}
 .sub{font-size:12.5px;color:var(--dim);margin-top:6px;word-break:break-all}
-.sub b{color:var(--fg);font-family:ui-monospace,Consolas,monospace;font-weight:600}
+.sub b{color:var(--fg);font-family:ui-monospace,Consolas,monospace;font-weight:600;white-space:nowrap}
 .warnrow{display:flex;align-items:center;justify-content:space-between;
   font-size:12px;color:var(--warn);margin-top:8px;padding:6px 9px;border-radius:8px;
   background:#2a2114;border:1px solid #4a3a15}
@@ -182,12 +194,13 @@ td.name{font-family:inherit}
   </section>
 
   <section class="card">
-    <div class="mh">
-      <h2>无线 ADB</h2>
-      <button class="tag" id="adbToggle">开启</button>
-    </div>
+    <div class="mh"><h2>无线 ADB</h2></div>
     <div class="big" id="adbState">--</div>
     <div class="sub" id="adbPort">--</div>
+    <div class="btns2" style="margin-top:10px">
+      <button id="adbToggle">开启</button>
+      <button class="tag" id="adbBoot" style="justify-content:center">自启：关</button>
+    </div>
     <div class="warnrow" id="adbResidueRow" style="display:none">
       <span id="adbResidue">--</span>
       <button class="tag" id="adbClear" style="color:var(--warn);border-color:#4a3a15">清理</button>
@@ -308,13 +321,19 @@ function render(s){
     }
   }
 
-  $('#badge').textContent = s.gw;
+  // 顶栏徽标显示对端真正能访问的地址；什么都没共享时不编一个出来
+  const host = (s.web||'').replace(/^https?:\/\//,'').replace(/:\d+$/,'');
+  $('#badge').textContent = host || '未共享';
 
-  // 接口地址收进右上角那个徽标里，页面不再单占一张卡
+  // 接口列表收进右上角那个徽标里，页面不再单占一张卡
   $('#ifaces').innerHTML = s.ifaces.length
-    ? s.ifaces.map(i=>`<div class="prow"><span>${ROLE[i.role]||'其它接口'}</span><b>${i.ip}</b></div>`).join('')
+    ? s.ifaces.map(i=>{
+        const r = ROLE[i.role] || '其它接口';
+        const label = i.role==='mobile' ? r + '（外部不可达）' : r;
+        return `<div class="prow"><span>${label}</span><b>${i.ip}</b></div>`;
+      }).join('')
     : '<div class="prow"><span>当前没有共享接口</span></div>';
-  $('#web').textContent = s.web;
+  $('#web').textContent = s.web || 'http://127.0.0.1:8080（本机）';
 
   $('#apState').textContent = s.ap==1 ? '已开启' : '未开启';
   $('#apState').style.color = s.ap==1 ? 'var(--acc)' : 'var(--dim)';
@@ -347,7 +366,6 @@ function render(s){
   const elFunc = $('#usbFunc');
   const linkWarn = (s.usb_mode === 'manual' && s.usb_linked == 0);
   elFunc.textContent = (NET_NAME[s.usb_func] || s.usb_func || '--')
-    + (s.usb_net_cfg==='auto' ? ' · 自动' : '')
     + (s.usb_mode === 'native' ? ' · 系统共享'
        : s.usb_mode === 'manual' ? ' · 模块自建' : '')
     + (linkWarn ? ' · 未链接' : '');
@@ -363,13 +381,28 @@ function render(s){
   $('#adbToggle').textContent = s.adb_tcp==1 ? '关闭' : '开启';
   $('#adbToggle').classList.toggle('on', s.adb_tcp==1);
 
+  // 开机自启是独立开关：只决定下次开机要不要自动把端口挂回去
+  const boot = s.adb_boot==1;
+  const eb = $('#adbBoot');
+  eb.textContent = '自启';
+  eb.classList.toggle('on', boot);
+  eb.title = '开机自启：' + (boot ? '开' : '关');
+
   // 老模块留下的 persist 属性：不清掉，开发者选项一直进不去
   const resid = s.adb_persist || '';
   $('#adbResidueRow').style.display = resid ? 'flex' : 'none';
   $('#adbResidue').textContent = resid ? ('persist=' + resid) : '';
-  if(s.adb_tcp==1 && s.adb_port && s.ifaces.length){
-    const urls = s.ifaces.map(i=>i.ip.split('/')[0]+':'+s.adb_port);
-    $('#adbPort').innerHTML = '连接 <b>' + urls.join('</b> <b>') + '</b>';
+  // 这个端口是给"另一台设备"连的：只列对端真能走到的接口，
+  // 蜂窝地址（ccmni/rmnet）在运营商内网，写上去也连不通
+  if(s.adb_tcp==1 && s.adb_port){
+    const reach = s.ifaces.filter(i=>i.role==='usb' || i.role==='hotspot' || i.role==='up');
+    if(reach.length){
+      const urls = reach.map(i=>i.ip.split('/')[0]+':'+s.adb_port);
+      // 地址单独占一行，别从中间断开
+      $('#adbPort').innerHTML = '另一台设备连<br><b>' + urls.join('</b><br><b>') + '</b>';
+    }else{
+      $('#adbPort').textContent = '监听 ' + s.adb_port + ' · 开 USB 共享或热点后这里会显示可连地址';
+    }
   }else{
     $('#adbPort').textContent = s.adb_port ? ('端口 ' + s.adb_port) : '端口未监听';
   }
@@ -494,8 +527,10 @@ function paint(id, vid){
 function keepBtn(sel, on, name){
   const el=$(sel); if(!el) return;
   el._on = on==1 ? 1 : 0;
-  el.textContent = name + '保活' + (el._on ? ' 开' : '');
+  el.textContent = '保活';
   el.classList.toggle('on', !!el._on);
+  // 状态写进 title，浏览器里长按/悬停能看到；手机上看圆点颜色
+  el.title = name + '保活：' + (el._on ? '开' : '关');
 }
 
 async function refresh(){
@@ -610,6 +645,15 @@ async function setAdb(on){
 }
 // 一个按钮切换：当前监听中就关，否则开
 $('#adbToggle').addEventListener('click', ()=>setAdb(!(ST.adb_tcp==1)));
+$('#adbBoot').addEventListener('click', async ()=>{
+  const v = ST.adb_boot==1 ? 0 : 1;
+  try{
+    const r = await api('adbboot',{on:v});
+    if(!r || !r.ok){ toast('设置失败'); return; }
+    toast('开机自启已' + (v?'开启':'关闭'));
+    setTimeout(refresh, 600);
+  }catch(e){ toast('设置失败'); }
+});
 $('#adbClear').addEventListener('click', async ()=>{
   try{
     const r = await api('clearpersist', {});

@@ -273,8 +273,11 @@ stop_dnsmasq() {
   if [ -f "$DATA/dnsmasq.pid" ]; then
     log "dnsmasq 停止 (pid $($BB cat "$DATA/dnsmasq.pid" 2>/dev/null))"
   fi
+  # 只杀自己 pid 文件记录的进程。绝不能 pkill -f "/system/bin/dnsmasq"：
+  # 系统热点/USB 共享的 tethering 用的是同一个 /system/bin/dnsmasq 二进制，
+  # pkill 通配会连 system_server 拉起的系统 dnsmasq 一起杀掉，
+  # 系统热点 DHCP 刚起来就被误杀 —— 这就是「模块开的热点瞬间被关」的元凶。
   [ -f "$DATA/dnsmasq.pid" ] && kill "$(cat $DATA/dnsmasq.pid)" 2>/dev/null
-  pkill -f "/system/bin/dnsmasq" 2>/dev/null
   # 清掉早期实验残留在 nat 表里的重定向/DNAT 规则
   for i in ncm0 rndis0 usb0 wlan2 ap0 softap0 swlan0; do
     while iptables -t nat -D PREROUTING -i "$i" -p udp --dport 67 -j REDIRECT --to-ports 6767 2>/dev/null; do :; done
@@ -455,8 +458,14 @@ apply() {
       log_chg dhcpw "yield" "DHCP: 让位冷却中，暂不自建（等系统 tethering 稳定）"
       : # 不碰 dnsmasq，保持现状
     else
-      log_chg dhcpw "self" "DHCP: 模块自建 dnsmasq 服务 ${USBDS:-无}"
-      sync_dnsmasq "$USBDS"
+      # USBDS 为空（没有 USB 下游接口）时不自建：sync_dnsmasq "" 会走 stop 分支，
+      # 反复触发 stop_dnsmasq 误杀系统 tethering 的 dnsmasq。没接口就什么都不做。
+      if [ -z "$USBDS" ]; then
+        log_chg dhcpw "none" "DHCP: 无 USB 下游接口，不自建"
+      else
+        log_chg dhcpw "self" "DHCP: 模块自建 dnsmasq 服务 $USBDS"
+        sync_dnsmasq "$USBDS"
+      fi
     fi
   fi
   ns=$(usb_net_state)
@@ -920,8 +929,10 @@ hs() {
   t=0
   [ "$1" = usb ] && t=1
   log_chg "hs$t" "$2" "hs: 请求 $1 on=$2"
-  # 开热点前先把我们的 DHCP 让出来，否则系统 DHCP 绑不上 67，热点直接起不来
-  if [ "$t" = 0 ] && [ "$2" != "0" ]; then stop_dnsmasq; sleep 1; fi
+  # 开热点前只停掉「模块自己」的 dnsmasq（我们 pid 文件里的那个），让出 67 给系统热点。
+  # 绝不能在这时 stop_dnsmasq 再 sleep：stop_dnsmasq 会误杀系统 tethering 的 dnsmasq，
+  # 等于先杀系统热点 DHCP 再请求开热点，热点一开就崩。让位由 apply 的 5 秒循环兜底。
+  if [ "$t" = 0 ] && [ "$2" != "0" ]; then stop_dnsmasq; fi
 
   if [ "$t" = 1 ]; then
     if [ "$2" = "0" ]; then

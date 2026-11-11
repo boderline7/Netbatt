@@ -118,6 +118,18 @@ UNCONN  0  0  0.0.0.0%ap0:67  0.0.0.0:*  users:(("system_server",pid=1439,fd=681
 1. **状态 key 冲突**：`apply` 的 DHCP 三分支用 `log_chg dhcpw` 记 `self`/`sys`，`usb_dhcp_tick` 在接管关闭时也用同一个 `dhcpw` 记 `off`。两把 key 同名、值不同，每 5 秒互相覆盖，`apply` 下一轮看到值变了就再 `sync_dnsmasq` 一遍。现改为独立 key `take`，互不干扰。
 2. **让位迟滞**：系统 tethering 建立的那几秒里 `sys_dhcp_any` 会时有时无，`apply` 若每次都立刻切回自建，dnsmasq 就在「让位/自建」之间高频起停。现在一旦进入让位（热点开或系统接管），至少保持 20 秒冷却，确认系统真的没接管了才允许自建。
 
+### v3.1.4：修模块开热点瞬间被关
+
+现场反馈「模块开的热点瞬间被关、手动开能开起来」，日志里抓到 `dnsmasq 未监听 67: failed to bind DHCP server socket: Address already in use`——模块的 dnsmasq 和系统 tethering 在抢同一个 67。
+
+根因是 `stop_dnsmasq` 里的 `pkill -f "/system/bin/dnsmasq"`：**系统热点和 USB 共享用的就是同一个 `/system/bin/dnsmasq` 二进制**，pkill 通配把 `system_server` 拉起的系统 dnsmasq 一起杀了，系统热点 DHCP 刚起来就崩，热点随即被系统回收。
+
+三处一起修：
+
+1. `stop_dnsmasq` 只杀自己 pid 文件记录的进程，删掉 `pkill -f`。
+2. `hs` 开热点前不再 `stop_dnsmasq; sleep 1`——那一步正是「先杀系统热点 DHCP 再请求开热点」。
+3. `apply` 在无 USB 下游接口时直接跳过自建，不再走 `sync_dnsmasq ""`（其内部会触发 stop）。
+
 ## 成功怎么判定：三层，以 ACK 为准
 
 把「ARP 出现」当成「地址分配成功」是不成立的。ARP 只说明邻居表里有解析记录，不能证明 `DISCOVER → OFFER → REQUEST → ACK` 走完了。而且 `/proc/net/arp` 的 Flags 只有 `0x0/0x2` 两态，**没有** NUD 的 REACHABLE/STALE——要看那个状态必须读 `ip neigh`。

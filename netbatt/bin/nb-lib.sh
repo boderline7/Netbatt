@@ -212,7 +212,7 @@ apply() {
 
   # 系统热点会用 67 端口起自己的 DHCP，抢了它热点就起不来，只能二选一
   if [ "$(ap_running)" = 1 ]; then stop_dnsmasq; else sync_dnsmasq "$USBDS"; fi
-  repair_usb
+  usb_dhcp_tick
 }
 
 # ---------- 端口转发 ----------
@@ -531,32 +531,140 @@ usb_up() {
   echo 0
 }
 
-# USB 客户端拿不到地址：热点占着 67，或者刚插上时热点正开着
-usb_needs_fix() {
-  [ "$(usb_online)" = 1 ] || return 1
-  [ "$(usb_off_flag)" = 0 ] || return 1
-  ip link show ncm0 >/dev/null 2>&1 || return 1
-  # 已经有本网段的客户端 → 正常
-  $BB awk -v p="$PREFIX." '$6=="ncm0" && $3 ~ /0x2/ && index($1,p)==1 {ok=1} END{exit !ok}' /proc/net/arp && return 1
-  # 有 169.254 客户端 → 说明 DHCP 失败过，需要让出端口补发
-  $BB awk '$6=="ncm0" && $3 ~ /0x2/ && $1 ~ /^169\.254\./ {f=1} END{exit !f}' /proc/net/arp
+# ---------- USB DHCP 调度（状态机） ----------
+# 为什么必须让系统让出 67：热点开着时 DHCP 由 system_server 持有，绑在
+# 0.0.0.0%ap0:67（带 SO_BINDTODEVICE）。实测 dnsmasq 2.51 的 DHCP socket 固定绑
+# 0.0.0.0:67，-i 指定接口、-a 指定地址、--bind-interfaces 三种写法全部返回
+# EADDRINUSE，没有按接口绑定的能力，因此两者不可能同时存在。
+# 这里做的是「临时接管」：系统让位 → 我们发地址 → 立刻还回去。
+# 它不是常驻 DHCP：租约到期/续租都没人应答，长期依赖客户端保留地址或改用静态 IP。
+DHCP_LOCK="$DATA/dhcp.lock"
+DHCP_STATE="$DATA/dhcp.state"
+DHCP_STAMP="$DATA/dhcp.stamp"
+DHCP_APORIG="$DATA/ap.orig"
+
+usb_ifaces() {
+  for i in rndis0 ncm0 usb0; do
+    ip link show "$i" >/dev/null 2>&1 && echo "$i"
+  done
 }
 
-# 短暂让出 67：关热点 → 发地址 → 再开热点
-repair_usb() {
-  usb_needs_fix || return 0
+# 67 上是否有人监听；ss 取不到时退回 /proc/net/udp
+port67_busy() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -lun 2>/dev/null | $BB awk 'NR>1{for(i=1;i<=NF;i++) if ($i ~ /:67$/) {f=1; exit}} END{exit !f}'
+  else
+    $BB awk 'NR>1{split($2,a,":"); if (a[2]=="0043") f=1} END{exit !f}' /proc/net/udp
+  fi
+}
+port67_free() { port67_busy && return 1; return 0; }
+
+# 插着 USB 且对端已拿到本网段地址（ARP 必须是 REACHABLE/STALE，排除 169.254）
+usb_client_ok() {
+  for i in $(usb_ifaces); do
+    $BB awk -v d="$i" -v p="$PREFIX." \
+      '$6==d && $3 ~ /0x[23]/ && $1 !~ /^169\.254/ && index($1,p)==1 {ok=1} END{exit !ok}' /proc/net/arp && return 0
+  done
+  return 1
+}
+
+# wait_for <秒> <函数>：轮询直到成功或超时，不靠固定 sleep 猜
+wait_for() {
+  t=$1; fn=$2
+  i=0; lim=$((t * 5))
+  while [ "$i" -lt "$lim" ]; do
+    $fn && return 0
+    $BB sleep 0.2 2>/dev/null || sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+dhcp_lock() {
+  i=0
+  while ! mkdir "$DHCP_LOCK" 2>/dev/null; do
+    ts=$($BB cat "$DHCP_LOCK/ts" 2>/dev/null); [ -z "$ts" ] && ts=0
+    # 陈旧锁（上一步被 kill 掉）超过 120 秒直接接管
+    [ $(( $(date +%s) - ts )) -gt 120 ] && { rm -rf "$DHCP_LOCK"; continue; }
+    i=$((i + 1)); [ "$i" -ge 8 ] && return 1
+    $BB sleep 1
+  done
+  date +%s > "$DHCP_LOCK/ts"
+  echo $$ > "$DHCP_LOCK/pid"
+}
+
+dhcp_unlock() { rm -rf "$DHCP_LOCK"; }
+
+# 冷却：一次失败后 180 秒内不再折腾，避免热点刚起来又被关
+dhcp_cooling() {
+  last=$($BB cat "$DHCP_STAMP" 2>/dev/null); [ -z "$last" ] && last=0
+  [ $(( $(date +%s) - last )) -lt 180 ]
+}
+
+usb_dhcp_fail() {
+  stop_dnsmasq
+  # USB 拔了不算失败：静默收场，不留冷却
+  if [ "$(usb_online)" != 1 ]; then
+    echo idle > "$DHCP_STATE"
+    dhcp_unlock
+    return 0
+  fi
+  echo "fail:$1" > "$DATA/dhcp.last"
+  echo cooldown > "$DHCP_STATE"
+  # 回滚：先让出 67，再把热点还原成本来的样子
+  wait_for 6 port67_free
+  [ "$($BB cat "$DHCP_APORIG" 2>/dev/null)" = 1 ] && hs wifi 1
+  date +%s > "$DHCP_STAMP"
+  dhcp_unlock
+  return 1
+}
+
+usb_dhcp_tick() {
+  [ "$(usb_online)" = 1 ] || return 0
+  [ "$(usb_off_flag)" = 0 ] || return 0
+  ifs=$(usb_ifaces); [ -z "$ifs" ] && return 0
+  # 热点没开时不存在 67 竞争，apply 里常规的 sync_dnsmasq 就够了；
+  # 这里只处理「热点开着 + USB 对端拿不到地址」这一种情况
   [ "$(ap_running)" = 1 ] || return 0
-  now=$(date +%s 2>/dev/null); [ -z "$now" ] && now=0
-  last=$($BB cat "$DATA/repair.ts" 2>/dev/null); [ -z "$last" ] && last=0
-  [ $((now - last)) -lt 120 ] && return 0
-  echo "$now" > "$DATA/repair.ts"
-  usbif=""
-  for i in rndis0 ncm0 usb0; do ip link show "$i" >/dev/null 2>&1 && usbif="$usbif $i"; done
-  hs wifi 0
-  sleep 4
-  sync_dnsmasq "$usbif"
-  sleep 8
-  hs wifi 1
+  usb_client_ok && return 0
+  dhcp_cooling && return 0
+  dhcp_lock || return 0
+
+  # 记录介入前热点是否真的在开，原来关着就不擅自打开
+  ap_orig=$(ap_running)
+  echo "$ap_orig" > "$DHCP_APORIG"
+
+  # 1) 让系统释放 67
+  echo releasing > "$DHCP_STATE"
+  [ "$ap_orig" = 1 ] && hs wifi 0
+  wait_for 10 port67_free || { usb_dhcp_fail "release_timeout"; return 1; }
+
+  # 2) 临时起 dnsmasq，只服务 USB 侧
+  echo serving > "$DHCP_STATE"
+  sync_dnsmasq "$ifs"
+  if ! wait_for 3 port67_busy; then
+    usb_dhcp_fail "dnsmasq_start_failed"
+    return 1
+  fi
+
+  # 3) 等对端真的拿到地址，等不到就回滚
+  wait_for 25 usb_client_ok || { usb_dhcp_fail "no_client_ip"; return 1; }
+
+  # 4) 撤掉 dnsmasq，确认 67 真的释放
+  stop_dnsmasq
+  echo restoring > "$DHCP_STATE"
+  wait_for 6 port67_free
+
+  # 5) 还原热点并等系统 DHCP 重新接管 67
+  if [ "$ap_orig" = 1 ]; then
+    hs wifi 1
+    wait_for 15 port67_busy
+  fi
+
+  echo idle > "$DHCP_STATE"
+  date +%s > "$DHCP_STAMP"
+  dhcp_unlock
+  return 0
 }
 
 # 永久保活：被系统关掉就重新拉起
@@ -607,6 +715,7 @@ status_json() {
 "ifaces":[$ij],"clients":$cj,"count":$cnt,"fwd":$fj,"target":"$tg",
 "batt":$(batt_json),"ap":$(ap_running),
 "usb":$(usb_up),"usb_online":$(usb_online),"keep_wifi":$KEEP_WIFI,"keep_usb":$KEEP_USB,
+"dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "web":"http://$GW:$PORT","dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
 EOF
 }

@@ -92,12 +92,13 @@ td.name{font-family:inherit}
 <div class="card">
   <h2>USB 共享（网桥）</h2>
   <div class="stat"><span>状态</span><span id="usbState">--</span></div>
+  <div class="stat"><span>地址分配</span><span id="dhcpState">--</span></div>
   <div class="btns" style="grid-template-columns:1fr 1fr">
     <button id="usbOn">开启共享</button>
     <button id="usbOff">关闭共享</button>
   </div>
   <button class="keep" id="keepUsb" style="width:100%;margin-top:9px">永久保活：关</button>
-  <div class="hint">插上 USB 数据线接到电脑后才会真正生效。USB 共享端固定用 192.168.8 段，接上来的设备固定拿 192.168.8.2，热点那边的设备可以直接访问它的端口。如果插入时热点正开着，模块会自动断开热点几秒把地址发下来再恢复。</div>
+  <div class="hint">插上 USB 数据线接到电脑后才会真正生效。USB 共享端固定用 192.168.8 段，接上来的设备固定拿 192.168.8.2，热点那边的设备可以直接访问它的端口。热点开着时插新设备，模块会短暂让出 DHCP 端口把地址发下去再恢复，每一步都有超时，失败会回滚并冷却一段时间。</div>
 </div>
 
 <div class="card">
@@ -187,6 +188,10 @@ function render(s){
   else if(s.usb_online==1) $('#usbState').textContent = '未开启（已插 USB）';
   else $('#usbState').textContent = '未开启（未插 USB）';
   $('#usbState').style.color = s.usb==1 ? 'var(--acc)' : 'var(--dim)';
+  const DHCP_TXT = {idle:'空闲', releasing:'让出 67 中', serving:'分配地址中', restoring:'恢复热点中', cooldown:'已回滚，冷却中'};
+  $('#dhcpState').textContent = DHCP_TXT[s.dhcp] || s.dhcp || '--';
+  $('#dhcpState').style.color = (s.dhcp==='serving'||s.dhcp==='restoring'||s.dhcp==='releasing') ? 'var(--acc)'
+    : (s.dhcp==='cooldown' ? '#e5a00d' : 'var(--dim)');
   pair('#usbOn','#usbOff', s.usb);
 
   keepBtn('#keepWifi', s.keep_wifi, '热点');

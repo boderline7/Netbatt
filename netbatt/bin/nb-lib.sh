@@ -14,7 +14,7 @@ mkdir -p "$DATA"
 PREFIX=192.168.8
 # USB 只有一台设备，池就一个地址：谁接上去都是 .2
 POOL_START=2
-POOL_END=2
+POOL_END=10
 DNS1=223.5.5.5
 DNS2=119.29.29.29
 PAUSE_CAP=88
@@ -69,6 +69,13 @@ fi
 
 . "$CFG"
 
+# 老配置的地址池是 2..2（单地址），实测 dnsmasq 会一直回 no address available，
+# 升级上来的配置必须一起纠正，否则只有全新安装才正常
+if [ -n "$POOL_START" ] && [ -n "$POOL_END" ] && [ "$POOL_END" -le "$POOL_START" ]; then
+  POOL_END=$((POOL_START + 8))
+  $BB sed -i "s/^POOL_END=.*/POOL_END=$POOL_END/" "$CFG" 2>/dev/null
+fi
+
 GW="$PREFIX.1"
 
 # ---------- 网络 ----------
@@ -115,7 +122,12 @@ sync_dnsmasq() {
   sleep 1
 
   # 永久租约：热点开时会抢走 67 端口，此时没法续租，只能让客户端一次拿到就不再续
-  # 池只有一个地址（.2），谁接 USB 谁就固定拿它
+  # 池不能只给一个地址：实测 dnsmasq 2.51 在 -F 192.168.8.2,192.168.8.2 时
+  # 收到 DISCOVER 会直接回 "no address available"，Windows 一直停在 169.254；
+  # 扩到 .2-.10 后同一客户端立刻拿到地址。
+  # 注意 2.51 没有 --dhcp-sequential-ip（传了会 bad command line options 直接退出），
+  # 所以具体分到哪个地址由 dnsmasq 自己决定，池内地址都可用即可，
+  # 对端真实地址始终以 ARP/租约为准（usb_peer），不假设固定 .2。
   # 注意 -L（租约文件）和 -l（日志文件）是两个选项，不能混用
   # --log-dhcp：把四步交互写进 logd，ACK 判定靠它（文件日志有缓冲延迟，不可实时读）
   set -- -k -R -n -K -x "$DATA/dnsmasq.pid" -u dns_tether \
@@ -192,6 +204,9 @@ apply() {
           ip addr add "$GW/24" dev "$i" 2>/dev/null
           A=$(ip -o -4 addr show)
         fi
+        # 只配地址不够：切换 sys.usb.config 后 rndis0/ncm0 可能停在 DOWN，
+        # 地址在但包发不出去，对端永远拿不到 DHCP 回应（实测 vivo rndis0 就是 DOWN）
+        ip link set "$i" up 2>/dev/null
         USBDS="$USBDS $i"
         ;;
     esac
@@ -201,7 +216,7 @@ apply() {
   echo "$GW" > "$DATA/gw"
 
   # 热点网段与 USB 网段互访：热点客户端要能直接访问 USB 那台设备的端口
-  HSIP=$(ip -o -4 addr show dev wlan2 2>/dev/null | $BB awk '{sub(/\/.*/,"",$4); print $4; exit}')
+  HSIP=$(ip -o -4 addr show dev "$(ap_iface)" 2>/dev/null | $BB awk '{sub(/\/.*/,"",$4); print $4; exit}')
   if [ -n "$HSIP" ]; then
     HNET=$(echo "$HSIP" | $BB awk -F. '{print $1"."$2"."$3".0/24"}')
     echo "$HNET" > "$DATA/hnet"
@@ -266,11 +281,14 @@ sync_fwd() {
 
   iptables -t nat -F NETBATT_FWD 2>/dev/null
   iptables -t nat -F NETBATT_SNAT 2>/dev/null
+  # SNAT 出接口不能写死 ncm0：vivo 的 USB 网卡叫 rndis0，写死会让回程包不回热点侧
   for p in $ports; do
     iptables -t nat -A NETBATT_FWD -p tcp --dport "$p" -j DNAT --to-destination "$tg:$p" 2>/dev/null
     iptables -t nat -A NETBATT_FWD -p udp --dport "$p" -j DNAT --to-destination "$tg:$p" 2>/dev/null
-    iptables -t nat -A NETBATT_SNAT -o ncm0 -p tcp --dport "$p" -j MASQUERADE 2>/dev/null
-    iptables -t nat -A NETBATT_SNAT -o ncm0 -p udp --dport "$p" -j MASQUERADE 2>/dev/null
+    for i in $(usb_ifaces); do
+      iptables -t nat -A NETBATT_SNAT -o "$i" -p tcp --dport "$p" -j MASQUERADE 2>/dev/null
+      iptables -t nat -A NETBATT_SNAT -o "$i" -p udp --dport "$p" -j MASQUERADE 2>/dev/null
+    done
   done
   echo "$tg" > "$DATA/fwd.target"
 }
@@ -505,8 +523,27 @@ batt_json() {
 
 # ---------- 状态 / 控制 ----------
 
+# 热点接口名各家不同：高通/小米多是 wlan2，联发科/vivo 是 ap0，
+# 有的 ROM 用 swlan0、softap0、wlan1。只看一个名字会在别家机器上永远判成"热点未开"，
+# 连带 USB DHCP 调度和网页状态一起失效。
+AP_IFACES="wlan2 ap0 swlan0 softap0 wlan1"
+ap_iface() {
+  for i in $AP_IFACES; do
+    ip link show "$i" >/dev/null 2>&1 && { echo "$i"; return 0; }
+  done
+  # 兜底：任何接口带 AP 模式的（部分 ROM 名字完全自定义）
+  i=$(iw dev 2>/dev/null | $BB awk '/Interface/{n=$2} /type AP/{print n; exit}')
+  [ -n "$i" ] && { echo "$i"; return 0; }
+  return 1
+}
+
 ap_running() {
-  ip link show wlan2 >/dev/null 2>&1 && echo 1 || echo 0
+  # 只看接口存在是不够的：热点关闭后 ap0 会残留成 state DOWN、无地址，
+  # 实测 vivo 上就是这样，会把「热点已关」误判成「热点开着」，
+  # 进而触发 DHCP 接管 -> 关热点 -> 等 67 超时 -> 假失败并杀掉刚起的 dnsmasq
+  a=$(ap_iface)
+  [ -z "$a" ] && { echo 0; return; }
+  ip -o -4 addr show dev "$a" 2>/dev/null | $BB grep -q 'inet ' && echo 1 || echo 0
 }
 
 # 让特权应用去开/关共享：hs <wifi|usb> <0|1>
@@ -863,6 +900,18 @@ set_keep() {
   esac
 }
 
+# 控制台地址：热点开着时用热点接口的真实 IP。
+# 系统热点的网段由 TetheringManager 自己选（实测 vivo 选了 192.168.138.x），
+# 跟模块设的 192.168.8.x 不是一回事，写死 $GW 会让连上热点的人打不开页面。
+web_url() {
+  a=$(ap_iface)
+  if [ -n "$a" ]; then
+    ip4=$(ip -o -4 addr show dev "$a" 2>/dev/null | $BB awk '{print $4}' | $BB cut -d/ -f1)
+    [ -n "$ip4" ] && { echo "http://$ip4:$PORT"; return; }
+  fi
+  echo "http://$GW:$PORT"
+}
+
 status_json() {
   ij=""
   # 列出全部 IPv4 接口（排除 lo）：USB 端固定 192.168.8.x，热点端用系统网段（10.x 等）
@@ -894,12 +943,15 @@ status_json() {
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
 "usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",
-"web":"http://$GW:$PORT","dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
+"web":"$(web_url)","dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
 EOF
 }
 
 start_web() {
   pgrep -f "httpd -f -p $PORT" >/dev/null 2>&1 && return 0
+  # CGI 目录由 busybox httpd 固定映射为 $HOME/cgi-bin，不需要也不能用 -c（-c 是配置文件路径）
+  # 但 api.sh 必须有执行位，否则 httpd 对 CGI 一律 404（首页仍正常，很容易误判成路由问题）
+  [ -x "$MODDIR/webroot/cgi-bin/api.sh" ] || chmod 755 "$MODDIR/webroot/cgi-bin/api.sh" 2>/dev/null
   $BB setsid $BB httpd -f -p "$PORT" -h "$MODDIR/webroot" > "$DATA/httpd.log" 2>&1 &
   sleep 1
   pgrep -f "httpd -f -p $PORT" > "$DATA/httpd.pid"

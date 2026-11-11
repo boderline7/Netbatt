@@ -103,9 +103,32 @@ UNCONN  0  0  0.0.0.0%ap0:67  0.0.0.0:*  users:(("system_server",pid=1439,fd=681
 - `ss` 的行数变化、厂商定制 ROM 的绑定方式差异都可能让判定失真，因此每一步都配了超时兜底而不是死等。
 - 完整的六步接管需要真实 `ncm0` 链路，V2121A 上没有该接口，只能在小米 11 上验证。
 
+## 真机实测
+
+2026-11-11 在 vivo V2121A（天玑 mt6893 / Android，Magisk 28104）上装包跑通全流程，途中修掉六个真实缺陷：
+
+| 缺陷 | 现象 | 原因 |
+|---|---|---|
+| zip 条目用了反斜杠 | 装完模块目录里只有 `module.prop`，`bin\loop.sh` 被当成单个文件名 | 用 PowerShell `Compress-Archive` 打包，中央目录写的是 `\`；必须用正斜杠打包 |
+| CGI 无执行位 | 首页 200，但 `/cgi-bin/api.sh` 一律 404 | Magisk 解压不保留 zip 里的权限，`api.sh` 是 644；需在 `post-fs-data.sh` 里补 chmod |
+| 热点接口名写死 `wlan2` | 热点开着但 `ap=0`，USB DHCP 调度永不触发 | vivo 的热点接口叫 `ap0` |
+| 热点接口残留导致误判 | 热点已关，状态机却以为开着，关热点→等 67 超时→假失败并杀掉 dnsmasq | `ap0` 关闭后残留为 `state DOWN`，只看接口存在不够，必须同时有 IPv4 地址 |
+| USB 网卡没 `up` | 地址配上了但包发不出去，对端一直停在 169.254 | 切换 `sys.usb.config` 后 `rndis0` 停在 DOWN，只配地址不够 |
+| 单地址池拿不到地址 | dnsmasq 收到 DISCOVER 回 `no address available` | `-F 192.168.8.2,192.168.8.2` 只有一个地址时不可用，扩到 `.2-.10` 立刻正常 |
+
+顺带把 SNAT 的 `-o ncm0` 改成按实际 USB 接口生成（vivo 是 `rndis0`），以及 `web` 地址改为热点接口的真实 IP。
+
+端到端结果：
+
+- USB：电脑识别为 `Remote NDIS based Internet Sharing Device`，DHCP 拿到 `192.168.8.5`（`PrefixOrigin=Dhcp`），`ping 192.168.8.1` 3/3 通、0ms，网页与 API 都能从 USB 侧访问。
+- 热点 + USB 共存：`ap0` 与 `rndis0` 同时在，`status` 里 role 分别标成 `hotspot` / `usb`，电脑（USB 侧）能直接打开热点侧地址（HTTP 200），跨网段 FORWARD 规则双向生成。
+- 充电：改阈值 3 秒内起停（`Charging(-281.9mA) → Discharging(+170.8mA)`），把上限温度压到 10℃ 能触发停充、改回即恢复；停用控制器会把 `keep_chg_soc` 还原成接管前的值。
+
+系统热点的网段由 `TetheringManager` 自己选，实测两次分别是 `192.168.138.0/24` 和 `192.168.91.0/24`，跟模块设的 `192.168.8.0/24` 不是一回事。所以「热点与 USB 同网段」这个目标在这类机型上做不到，实际靠 iptables 的跨网段 FORWARD 保证互访。
+
 ## 安装
 
-1. 将仓库打包为 zip（`netbatt/` 目录内容需位于压缩包根部）。
+1. 将 `netbatt/` 目录内容打成 zip，**条目必须是正斜杠**（用 PowerShell `Compress-Archive` 会写反斜杠，装上去目录结构全废）。
 2. Magisk 刷入，重启。
 3. 桌面出现 `NetBatt`，或浏览器访问 `http://<手机IP>:8080`。
 
@@ -120,12 +143,14 @@ UNCONN  0  0  0.0.0.0%ap0:67  0.0.0.0:*  users:(("system_server",pid=1439,fd=681
 
 | 机型 | 平台 | 充电通道 | 状态 |
 |---|---|---|---|
-| 小米 11（venus） | 骁龙 888 | switch · `qcom-battery/input_suspend` | 已跑通 |
-| vivo V2121A | 天玑 mt6893 | soc · `battery/keep_chg_soc` | 已跑通 |
+| 小米 11（venus） | 骁龙 888 | switch · `qcom-battery/input_suspend` | 充电通道已跑通，NetBatt 模块未实装 |
+| vivo V2121A | 天玑 mt6893 | soc · `battery/keep_chg_soc` | 模块已实装，充电 / 热点 / USB 共享均实测 |
 
 天玑机上 `battery/input_suspend` 是 0444 只读，写不进去（返回 Permission denied），所以这类机型不能沿用开关节点，只能走目标电量通道。
 
-USB DHCP 调度的验证进度：V2121A 上逐项跑过端口占用检测（热点关/开两种状态）、锁的互斥与重入、超时精度、冷却窗口、三层判定（构造 DHCPREQUEST 拿到真实 `DHCPACK`，并验证「无新增不认旧记录」）、崩溃恢复与周期锁。完整六步接管需要带 `ncm0` 的机型，尚未端到端验证。
+USB DHCP 的验证进度：V2121A 上跑通了「热点关闭 + USB 共享」这条主路径——dnsmasq 常驻在 `rndis0:67`，电脑完成 `DISCOVER → OFFER → REQUEST → ACK` 并拿到 `192.168.8.5`，网页识别到客户端、`usb_net=ok`。
+
+**未验证的是「热点开着时插新设备 → 六步接管」**：这次测试全程热点处于关闭状态，接管流程没有触发（V2121A 的 USB 网卡是 `rndis0` 而非 `ncm0`，但接口名已覆盖）。三层判定（构造 DHCPREQUEST 拿真实 `DHCPACK`、验证「无新增不认旧记录」）、锁的互斥与重入、超时精度、冷却窗口、崩溃恢复与周期锁，都是函数级验证过的。
 
 另外用 `veth` + 网络命名空间在本机造过链路：dnsmasq 侧能看到 `DHCPDISCOVER → DHCPOFFER`，但客户端收不到回包（虚拟链路 + Android 网络栈的限制，`veth1` 收发计数为 0），所以**广播修复的实际效果只能在真实 `ncm0` 上确认**。
 
@@ -136,4 +161,4 @@ USB DHCP 调度的验证进度：V2121A 上逐项跑过端口占用检测（热�
 - 热点与 USB 为三层互通：`IP:端口` 可直连，跨网段的广播发现（mDNS / SSDP / DLNA）不工作。
 - USB 口供电通常只有 5V/0.5A，热点与亮屏同时运行时电量可能负增长。
 - soc 通道机型上，部分平台的 `current_now` 充电时为负值，模块已按 `status` 统一符号；仍有个别平台满电后停在 `Discharging` 数秒才切 `Charging`，属充电 IC 的保护延迟。
-- 热点接口名按 `wlan2 / ap* / swlan*` 匹配，接口名特殊的机型需在 `downstream()` 里补一条。
+- 热点接口名自动匹配 `wlan2 / ap0 / swlan0 / softap0 / wlan1`，并回退查 `iw dev` 里的 AP 模式接口；完全自定义命名的 ROM 仍可能漏判。

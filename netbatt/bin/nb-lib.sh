@@ -57,8 +57,8 @@ ADB_BOOT=1
 USB_DHCP_TAKEOVER=0
 # 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
 LOG_MAX=3145728
-# 周期采样间隔（秒）。loop 每 5 秒一轮，太密会刷满日志，默认 30 秒记一行电量/功率
-SAMPLE_INT=30
+# 周期采样间隔（秒）。loop 每 5 秒一轮，太密会刷满日志，默认 15 秒记一行电量/功率
+SAMPLE_INT=15
 
 if [ ! -f "$CFG" ]; then
   cat > "$CFG" <<EOC
@@ -102,7 +102,7 @@ EOC
 fi
 
 # 升级上来的老配置缺新键时补默认值；已有的键一律不动
-for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728" "SAMPLE_INT=30"; do
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728" "SAMPLE_INT=15"; do
   $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
 done
 
@@ -164,20 +164,20 @@ log_chg() {
 }
 
 # 周期采样：按固定间隔记一行电量/功率快照。loop 每 5 秒一轮，5 秒就记一行
-# 会把 3MB 几小时刷满，所以按 SAMPLE_INT（默认 30 秒）降采样；间隔内值没变化
-# 也不记，避免长时间待机时全是重复行。落一行约 80 字节，30 秒一行 ≈ 9KB/小时，
-# 3MB 日志能盖 5 天以上。
-SAMPLE_INT=${SAMPLE_INT:-30}
+# 会把 3MB 几小时刷满，所以按 SAMPLE_INT（默认 15 秒）降采样；间隔内值没变化
+# 也不记，避免长时间待机时全是重复行。落一行约 90 字节，15 秒一行 ≈ 21KB/小时，
+# 3MB 日志能盖 6 天以上。
+SAMPLE_INT=${SAMPLE_INT:-15}
 sample_now() {
   now=$(date '+%s')
   last=$($BB cat "$DATA/sample.ts" 2>/dev/null)
   [ -n "$last" ] && [ $(( now - last )) -lt "$SAMPLE_INT" ] && return 0
-  # 快照键：电量:方向:功率:温度，四项全同就跳过（说明这 30 秒没实质变化）
-  key="$1:$2:$3:$4"
+  # 快照键：电量:方向:功率:电流:温度，五项全同就跳过（说明这段没实质变化）
+  key="$1:$2:$3:$4:$5"
   [ "$($BB cat "$DATA/sample.k" 2>/dev/null)" = "$key" ] && return 0
   printf '%s\n' "$now" > "$DATA/sample.ts" 2>/dev/null
   printf '%s\n' "$key" > "$DATA/sample.k" 2>/dev/null
-  log "采样: $1% $2 $3W $4℃"
+  log "采样: $1% $2 $3W ${4}mA $5℃"
 }
 
 # 最近 n 行；当前文件不够时把滚动出去的那份接在前面
@@ -425,14 +425,25 @@ apply() {
   #    每轮 bind 失败刷错误日志（实测 vivo：system_server 占 0.0.0.0%rndis0:67）
   # 3) 没有下游接口
   if [ "$(ap_running)" = 1 ]; then
+    date +%s > "$DATA/yield.ts" 2>/dev/null
     stop_dnsmasq
   elif sys_dhcp_any "$USBDS"; then
     # 系统 tethering 已接管：这是「有服务」而不是「端口被占所以判断失败」，记下来
     log_chg dhcpw "sys" "DHCP: 由系统 tethering 负责（模块让位）"
+    date +%s > "$DATA/yield.ts" 2>/dev/null
     stop_dnsmasq
   else
-    log_chg dhcpw "self" "DHCP: 模块自建 dnsmasq 服务 ${USBDS:-无}"
-    sync_dnsmasq "$USBDS"
+    # 让位迟滞：系统 tethering 建立的那几秒里 sys_dhcp_any 会时有时无，
+    # 若每次都立刻切回自建，dnsmasq 会在「让位/自建」之间高频起停，租约永远发不出去。
+    # 让位后至少保持 20 秒，确认系统真的没接管了才允许自建。
+    yt=$($BB cat "$DATA/yield.ts" 2>/dev/null); [ -z "$yt" ] && yt=0
+    if [ $(( $(date +%s) - yt )) -lt 20 ]; then
+      log_chg dhcpw "yield" "DHCP: 让位冷却中，暂不自建（等系统 tethering 稳定）"
+      : # 不碰 dnsmasq，保持现状
+    else
+      log_chg dhcpw "self" "DHCP: 模块自建 dnsmasq 服务 ${USBDS:-无}"
+      sync_dnsmasq "$USBDS"
+    fi
   fi
   ns=$(usb_net_state)
   log_chg usbnet "$ns" "USB 链路: $ns"
@@ -727,7 +738,8 @@ sample_once() {
     Full) dir=满 ;;
     *) dir=闲 ;;
   esac
-  sample_now "$cap" "$dir" "$watt" "$t"
+  ma=$($BB awk -v c="$cur" 'BEGIN{printf "%d", c/1000}')
+  sample_now "$cap" "$dir" "$watt" "$ma" "$t"
 }
 
 chg_once() {
@@ -859,6 +871,14 @@ ap_running() {
   ip -o -4 addr show dev "$a" 2>/dev/null | $BB grep -q 'inet ' && echo 1 || echo 0
 }
 
+# wait_for 需要的是退出码（0=开，1=关），ap_running 输出的是字符串不能直接当条件用
+ap_is_up() {
+  a=$(ap_iface) || return 1
+  ip -o -4 addr show dev "$a" 2>/dev/null | $BB grep -q 'inet '
+}
+
+ap_down() { ap_is_up && return 1; return 0; }
+
 # 系统 tethering 是否已在某个接口上提供 DHCP：绑定形式为 0.0.0.0%<iface>:67，
 # 持有者是 system_server。命中说明系统自己把这条链路服务得很好，模块必须让位。
 sys_dhcp_on() {
@@ -920,6 +940,14 @@ hs() {
   fi
 
   am broadcast -n com.netbatt.console/.TetherReceiver --ei type 0 --ez on "$2" >/dev/null 2>&1
+  # 热点开关是异步的：系统 TetheringManager 要 1-2 秒才把 ap0 配好地址，
+  # 立刻返回会让页面下一轮 status 还看到「未开启」。这里短等一拍，让 ap_running
+  # 尽快反映真实状态；失败不阻塞，apply 的 5 秒循环会兜底校正。
+  if [ "$2" = "0" ]; then
+    wait_for 3 ap_down 2>/dev/null
+  else
+    wait_for 3 ap_is_up 2>/dev/null
+  fi
 }
 
 # 用户手动关过 USB 共享后，保活不要再自动拉起
@@ -1294,7 +1322,12 @@ usb_dhcp_tick() {
   # 实测这正是「开了无线 ADB 之后热点起不来」的来源：adbd 重启会让 USB 重新枚举，
   # 触发一轮接管，热点被关掉之后系统那边的 tethering 状态还没回来，页面就一直是未开启。
   if [ "$USB_DHCP_TAKEOVER" != 1 ]; then
-    log_chg dhcpw "off" "DHCP: 接管已关闭（不关热点），USB 地址交给系统"
+    # 关键：这里用独立的 take key，不能碰 dhcpw。dhcpw 是 apply 的 DHCP 三分支
+    # （热点开→stop / 系统接管→stop / 否则自建）在维护的状态标记，值在 self/sys 之间
+    # 来回跳。若这里再写 log_chg dhcpw "off"，两个函数共用一把 key，每 5 秒互相覆盖，
+    # apply 下一轮又看到值变了就再 sync_dnsmasq 一遍 —— dnsmasq 起了又停、起了又停，
+    # 租约永远发不出去，热点连上的设备没网、USB 对端拿不到 IP，就是这个震荡。
+    log_chg take "off" "DHCP: 接管关闭（默认），USB 地址交给系统或按 apply 自建"
     return 0
   fi
   # 热点没开时不存在 67 竞争，apply 里常规的 sync_dnsmasq 就够了；

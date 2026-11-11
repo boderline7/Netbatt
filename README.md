@@ -109,6 +109,15 @@ UNCONN  0  0  0.0.0.0%ap0:67  0.0.0.0:*  users:(("system_server",pid=1439,fd=681
 
 所以 `USB_DHCP_TAKEOVER` 默认 `0`：不关热点、不抢 67，USB 端的地址交给系统 tethering。系统没接管、又确实需要对端拿地址时，在 `/data/adb/netbatt/config.sh` 里改成 `1` 再重启模块，代价是接管那几十秒热点会断一次。下面几节记录的是这条路打开时的实现细节。
 
+### v3.1.2：修 dnsmasq 震荡
+
+接管关闭后，日志里出现过 `模块自建 dnsmasq` 与 `接管已关闭` 每 5 秒交替刷屏、dnsmasq 起了又停的死循环——这正是「热点开着但没网、USB 对端拿不到 IP」的直接原因：dnsmasq 每次刚起就被下一轮杀掉，租约永远发不出去。
+
+两个根因，都修了：
+
+1. **状态 key 冲突**：`apply` 的 DHCP 三分支用 `log_chg dhcpw` 记 `self`/`sys`，`usb_dhcp_tick` 在接管关闭时也用同一个 `dhcpw` 记 `off`。两把 key 同名、值不同，每 5 秒互相覆盖，`apply` 下一轮看到值变了就再 `sync_dnsmasq` 一遍。现改为独立 key `take`，互不干扰。
+2. **让位迟滞**：系统 tethering 建立的那几秒里 `sys_dhcp_any` 会时有时无，`apply` 若每次都立刻切回自建，dnsmasq 就在「让位/自建」之间高频起停。现在一旦进入让位（热点开或系统接管），至少保持 20 秒冷却，确认系统真的没接管了才允许自建。
+
 ## 成功怎么判定：三层，以 ACK 为准
 
 把「ARP 出现」当成「地址分配成功」是不成立的。ARP 只说明邻居表里有解析记录，不能证明 `DISCOVER → OFFER → REQUEST → ACK` 走完了。而且 `/proc/net/arp` 的 Flags 只有 `0x0/0x2` 两态，**没有** NUD 的 REACHABLE/STALE——要看那个状态必须读 `ip neigh`。
@@ -238,7 +247,7 @@ setprop ctl.restart adbd
 
 - 当前文件 `netbatt.log`，写满 `LOG_MAX`（默认 3145728 字节，即 3MB）后滚成 `netbatt.log.1`，只保留一份历史，磁盘占用最多约 6MB。
 - 记录的是状态跳变，不是每轮快照：`loop.sh` 每 5 秒跑一次 `apply`，`log_chg` 用 `$DATA/logv.*` 存上次取值，值不变就不写。幂等动作（保活重复拉起、DHCP 轮询）因此不会把 3MB 刷满。
-- 充放电曲线走独立的**周期采样**：`sample_once` 每 5 秒读一次电量/电流/电压/温度，按 `SAMPLE_INT`（默认 30 秒）降采样成一行 `采样: 76% 放 -4.2W 31.0℃`；间隔内四项全同就跳过，不会堆重复行。30 秒一行约 9KB/小时，3MB 能盖 5 天以上。想更密在 `config.sh` 里调小 `SAMPLE_INT`。
+- 充放电曲线走独立的**周期采样**：`sample_once` 每 5 秒读一次电量/电流/电压/温度，按 `SAMPLE_INT`（默认 15 秒）降采样成一行 `采样: 76% 放 -4.2W -1050mA 31.0℃`；间隔内五项全同就跳过，不会堆重复行。15 秒一行约 21KB/小时，3MB 能盖 6 天以上。想更密在 `config.sh` 里调小 `SAMPLE_INT`。
 - 内容：启动快照（版本、Android 版本、平台、gadget functions、充电通道）、网段与下游接口变化、USB 功能切换与结果、dnsmasq 起停与未监听原因、DHCP 接管每一步与失败原因、USB 链路状态、充电结论变化、周期采样、ADB / 网段 / 阈值 / 转发等用户动作。
 - 网页「运行日志」显示最近 150 行，可刷新、清空、导出。
 - **导出**：点「下载」不是走浏览器附件（WebView 壳没实现下载监听，`Content-Disposition` 会被静默吞掉），而是由 root 直接把整份日志落盘到 `/sdcard/Download/netbatt.log`，页面提示路径，用文件管理器就能取。桌面浏览器里仍可用 `/cgi-bin/api.sh?a=log&full=1` 原始下载。

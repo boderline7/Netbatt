@@ -134,6 +134,14 @@ case "$a" in
     log_clear
     echo '{"ok":1}'
     ;;
+  logdump)
+    p=$(log_export)
+    if [ -n "$p" ]; then
+      echo "{\"ok\":1,\"path\":\"$p\"}"
+    else
+      echo '{"ok":0,"error":"export_failed"}'
+    fi
+    ;;
   *)
     echo '{"ok":0,"error":"unknown_action"}'
     ;;

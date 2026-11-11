@@ -57,6 +57,8 @@ ADB_BOOT=1
 USB_DHCP_TAKEOVER=0
 # 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
 LOG_MAX=3145728
+# 周期采样间隔（秒）。loop 每 5 秒一轮，太密会刷满日志，默认 30 秒记一行电量/功率
+SAMPLE_INT=30
 
 if [ ! -f "$CFG" ]; then
   cat > "$CFG" <<EOC
@@ -85,6 +87,7 @@ ADB_PORT=$ADB_PORT
 ADB_BOOT=$ADB_BOOT
 USB_DHCP_TAKEOVER=$USB_DHCP_TAKEOVER
 LOG_MAX=$LOG_MAX
+SAMPLE_INT=$SAMPLE_INT
 EOC
 fi
 
@@ -99,7 +102,7 @@ EOC
 fi
 
 # 升级上来的老配置缺新键时补默认值；已有的键一律不动
-for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728"; do
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728" "SAMPLE_INT=30"; do
   $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
 done
 
@@ -160,6 +163,23 @@ log_chg() {
   log "$*"
 }
 
+# 周期采样：按固定间隔记一行电量/功率快照。loop 每 5 秒一轮，5 秒就记一行
+# 会把 3MB 几小时刷满，所以按 SAMPLE_INT（默认 30 秒）降采样；间隔内值没变化
+# 也不记，避免长时间待机时全是重复行。落一行约 80 字节，30 秒一行 ≈ 9KB/小时，
+# 3MB 日志能盖 5 天以上。
+SAMPLE_INT=${SAMPLE_INT:-30}
+sample_now() {
+  now=$(date '+%s')
+  last=$($BB cat "$DATA/sample.ts" 2>/dev/null)
+  [ -n "$last" ] && [ $(( now - last )) -lt "$SAMPLE_INT" ] && return 0
+  # 快照键：电量:方向:功率:温度，四项全同就跳过（说明这 30 秒没实质变化）
+  key="$1:$2:$3:$4"
+  [ "$($BB cat "$DATA/sample.k" 2>/dev/null)" = "$key" ] && return 0
+  printf '%s\n' "$now" > "$DATA/sample.ts" 2>/dev/null
+  printf '%s\n' "$key" > "$DATA/sample.k" 2>/dev/null
+  log "采样: $1% $2 $3W $4℃"
+}
+
 # 最近 n 行；当前文件不够时把滚动出去的那份接在前面
 log_tail() {
   n="$1"
@@ -182,8 +202,27 @@ log_dump() {
 
 log_clear() {
   : > "$LOG" 2>/dev/null
-  rm -f "$LOG1" "$DATA"/logv.* 2>/dev/null
+  rm -f "$LOG1" "$DATA"/logv.* "$DATA"/sample.ts "$DATA"/sample.k 2>/dev/null
   log "日志已清空"
+}
+
+# 导出到用户随手能读的目录。WebView 壳没实现 DownloadListener，
+# Content-Disposition 附件会被静默吞掉，所以直接由 root 落盘到 /sdcard/Download，
+# 用户用文件管理器/相册都能找到。返回落盘路径，失败返回空。
+log_export() {
+  dst=""
+  for d in /sdcard/Download /sdcard/Documents /storage/emulated/0/Download /data/media/0/Download; do
+    if [ -d "$d" ] || mkdir -p "$d" 2>/dev/null; then
+      dst="$d/netbatt.log"
+      break
+    fi
+  done
+  [ -z "$dst" ] && return 1
+  if log_dump > "$dst" 2>/dev/null; then
+    echo "$dst"
+    return 0
+  fi
+  return 1
 }
 
 # 模块构建号，页面拿它判断自己是不是 WebView 缓存里的旧副本
@@ -667,7 +706,34 @@ chg_apply() {
   log "充电: 写入 $CHG_NODE=$v（$CHG_CH ${1}）"
 }
 
+# 周期采样入口：loop 每 5 秒调一次，内部按 SAMPLE_INT 降采样。控制器关不关都记，
+# 因为采样是想看清整条充放电曲线，跟阈值控制是两个独立诉求。
+sample_once() {
+  cap=$(cat $BATT/capacity 2>/dev/null); [ -z "$cap" ] && return 0
+  st=$(cat $BATT/status 2>/dev/null); [ -z "$st" ] && st="?"
+  rawt=$(cat $BATT/temp 2>/dev/null); [ -z "$rawt" ] && rawt=0
+  t=$($BB awk -v t="$rawt" 'BEGIN{printf "%.1f", t/10}')
+  cur=$(cat $BATT/current_now 2>/dev/null); [ -z "$cur" ] && cur=0
+  case "$st" in
+    Charging)    [ "$cur" -lt 0 ] && cur=$((cur * -1)) ;;
+    Discharging) [ "$cur" -gt 0 ] && cur=$((cur * -1)) ;;
+  esac
+  vol=$(cat $BATT/voltage_now 2>/dev/null); [ -z "$vol" ] && vol=3800000
+  [ "$vol" = 0 ] && vol=3800000
+  watt=$($BB awk -v v="$vol" -v c="$cur" 'BEGIN{printf "%.2f", v*c/1e12}')
+  case "$st" in
+    Charging) dir=充 ;;
+    Discharging) dir=放 ;;
+    Full) dir=满 ;;
+    *) dir=闲 ;;
+  esac
+  sample_now "$cap" "$dir" "$watt" "$t"
+}
+
 chg_once() {
+  # 周期采样独立于控制器开关：关掉充电控制时采样照记
+  sample_once
+
   # 控制器没开：还原到接管前的状态，不做阈值判断
   if [ ! -f "$DATA/chg.on" ]; then
     chg_apply restore >/dev/null 2>&1

@@ -794,8 +794,18 @@ $('#chgRestart').addEventListener('click', async ()=>{ await api('chg',{op:'rest
 $('#chgStop').addEventListener('click', async ()=>{ await api('chg',{op:'stop'}); toast('已停止并恢复充电'); setTimeout(refresh,900); });
 
 $('#logReload').addEventListener('click', loadLog);
-// full=1 带附件头，浏览器直接存成 netbatt.log
-$('#logDl').addEventListener('click', ()=>{ window.location.href = '/cgi-bin/api.sh?a=log&full=1'; });
+// WebView 壳没实现下载监听，attachment 会被静默吞掉；改成让模块直接落盘到
+// Download 目录，再提示路径，用户用文件管理器就能取。
+$('#logDl').addEventListener('click', async ()=>{
+  const b = $('#logDl');
+  b.disabled = true; b.textContent = '导出中…';
+  try{
+    const r = await api('logdump');
+    if(r.ok) toast('已保存到 ' + r.path);
+    else toast('导出失败');
+  }catch(e){ toast('导出失败'); }
+  b.disabled = false; b.textContent = '下载';
+});
 // 不用 confirm：WebView 壳里没设 WebChromeClient 时 confirm 会被直接吞掉，按钮就像坏了
 let logArm = 0;
 $('#logClear').addEventListener('click', async ()=>{

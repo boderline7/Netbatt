@@ -51,11 +51,11 @@ ADB_PORT=5555
 # 太早设会被 init 覆盖，面板会显示"已配置，未监听"
 ADB_BOOT=1
 # USB 端拿不到地址时，是否允许模块临时关掉热点、抢 67 端口把地址发下去。
-# 默认 1（开）：vivo 这类 ROM 的系统 tethering DHCP 不稳定，USB 对端常常拿不到地址
-# （日志里 no_peer 卡死、热点 ap0 也没 DHCP）。接管会在对端没地址时临时关热点发一次
-# 地址再还原，代价是接管瞬间热点断一下。
-# 系统 tethering 一直稳定、对端总能拿到地址的机型，可设回 0 关掉。
-USB_DHCP_TAKEOVER=1
+# 默认 0（关）：v3.1.7 已确认真正的病根是「系统 tethering 的 dnsmasq 绑通配 67，
+# sys_dhcp_on 按接口名抓不到 → 模块误判没接管去自建 → 两个 dnsmasq 抢 67 误杀系统
+# 进程 → 热点崩溃」。正确的修法是 native 让位 + 拉 UP 网卡，不是关热点抢端口。
+# 这条接管路径在系统 dnsmasq 活着时既抢不到 67、还会把系统热点 DHCP 一起干掉。
+USB_DHCP_TAKEOVER=0
 # 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
 LOG_MAX=3145728
 # 周期采样间隔（秒）。loop 每 5 秒一轮，太密会刷满日志，默认 15 秒记一行电量/功率
@@ -103,7 +103,7 @@ EOC
 fi
 
 # 升级上来的老配置缺新键时补默认值；已有的键一律不动
-for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=1" "LOG_MAX=3145728" "SAMPLE_INT=15"; do
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728" "SAMPLE_INT=15"; do
   $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
 done
 
@@ -136,6 +136,11 @@ fi
 if ! $BB grep -q '^CFG_DHCP_SEED=' "$CFG" 2>/dev/null; then
   [ "$USB_DHCP_TAKEOVER" = "0" ] && $BB sed -i 's/^USB_DHCP_TAKEOVER=.*/USB_DHCP_TAKEOVER=1/' "$CFG" 2>/dev/null
   echo "CFG_DHCP_SEED=1" >> "$CFG"
+fi
+# v3.1.7 确认接管方案是热点崩溃的帮凶，默认改回关。v3.1.6 把默认灌成 1，这里纠正回来。
+if ! $BB grep -q '^CFG_DHCP_SEED2=' "$CFG" 2>/dev/null; then
+  [ "$USB_DHCP_TAKEOVER" = "1" ] && $BB sed -i 's/^USB_DHCP_TAKEOVER=.*/USB_DHCP_TAKEOVER=0/' "$CFG" 2>/dev/null
+  echo "CFG_DHCP_SEED2=1" >> "$CFG"
 fi
 . "$CFG"
 
@@ -289,7 +294,20 @@ stop_dnsmasq() {
   # 系统热点/USB 共享的 tethering 用的是同一个 /system/bin/dnsmasq 二进制，
   # pkill 通配会连 system_server 拉起的系统 dnsmasq 一起杀掉，
   # 系统热点 DHCP 刚起来就被误杀 —— 这就是「模块开的热点瞬间被关」的元凶。
-  [ -f "$DATA/dnsmasq.pid" ] && kill "$(cat $DATA/dnsmasq.pid)" 2>/dev/null
+  # v3.1.7 再加一层保险：kill 前校验 pid 对应的进程命令行确实是「模块自己起的」dnsmasq。
+  # 模块起的带 -x $DATA/dnsmasq.pid（唯一特征），系统 tethering 的不带这个路径。
+  # pid 文件串号（系统 dnsmasq 起来复用了死 pid）时，这层校验能拦住误杀。
+  if [ -f "$DATA/dnsmasq.pid" ]; then
+    p=$($BB cat "$DATA/dnsmasq.pid" 2>/dev/null)
+    if [ -n "$p" ] && [ -r "/proc/$p/cmdline" ]; then
+      cmd=$($BB cat "/proc/$p/cmdline" 2>/dev/null | $BB tr '\0' ' ')
+      if echo "$cmd" | $BB grep -qE 'dnsmasq' && echo "$cmd" | $BB grep -qF "$DATA/dnsmasq.pid"; then
+        kill "$p" 2>/dev/null
+      else
+        log "dnsmasq pid $p 不是模块自己的（串号），拒绝误杀"
+      fi
+    fi
+  fi
   # 清掉早期实验残留在 nat 表里的重定向/DNAT 规则
   for i in ncm0 rndis0 usb0 wlan2 ap0 softap0 swlan0; do
     while iptables -t nat -D PREROUTING -i "$i" -p udp --dport 67 -j REDIRECT --to-ports 6767 2>/dev/null; do :; done
@@ -398,7 +416,10 @@ apply() {
         # 实测 vivo 开 ncm,adb 后 system_server 立刻在 rndis0 上跑自己的 DHCP
         # （网段 192.168.66.x），模块若同时把接口改成 192.168.8.1，
         # 对端拿到 66.x 却连不上 8.1，等于把能用的链路改坏。
-        if sys_dhcp_on "$i"; then
+        # v3.1.7：系统 dnsmasq 绑的是通配 0.0.0.0:67，sys_dhcp_on 按接口名
+        # grep 抓不到，导致漏判。这里只要系统 dnsmasq 在跑，就认定系统已接管，
+        # 只拉 UP 不配地址、不抢 DHCP。
+        if sys_dnsmasq_alive || sys_dhcp_on "$i"; then
           ip link set "$i" up 2>/dev/null
           USBDS="$USBDS $i"
           continue
@@ -446,6 +467,9 @@ apply() {
   # 2) 系统 tethering 正在服务 USB 接口 —— 它已经给了地址，我们再去抢只会
   #    每轮 bind 失败刷错误日志（实测 vivo：system_server 占 0.0.0.0%rndis0:67）
   # 3) 没有下游接口
+  # 4) usb.mode=native：系统 tethering 建出了网卡，地址归系统发（v3.1.7 根因修复——
+  #    sys_dhcp_on 按接口名 grep 抓不到通配绑定的系统 dnsmasq，误判「没接管」去自建，
+  #    两个 dnsmasq 抢 67、stop_dnsmasq 误杀系统进程 → 热点崩溃）
   if [ "$(ap_running)" = 1 ]; then
     date +%s > "$DATA/yield.ts" 2>/dev/null
     # 热点开着时顺带确认系统 DHCP 是否在热点接口上服务——没服务的话，
@@ -455,6 +479,19 @@ apply() {
     else
       log_chg apdhcp "off" "热点: 系统 DHCP 未在 $(ap_iface) 上服务，连入设备可能拿不到地址"
     fi
+    stop_dnsmasq
+  elif [ "$($BB cat "$DATA/usb.mode" 2>/dev/null)" = native ]; then
+    # 系统 tethering 全权：模块只把 USB 网卡拉 UP（网卡 DOWN 时系统 dnsmasq 也发不出地址），
+    # 绝不碰 dnsmasq、不抢 67、不配地址。
+    for i in $USBDS; do ip link set "$i" up 2>/dev/null; done
+    log_chg dhcpw "sys" "DHCP: 系统 tethering 全权（usb.mode=native），模块让位"
+    date +%s > "$DATA/yield.ts" 2>/dev/null
+    stop_dnsmasq
+  elif sys_dnsmasq_alive; then
+    # 系统 tethering 的 dnsmasq 活着：地址由它发，模块让位，绝不抢。
+    for i in $USBDS; do ip link set "$i" up 2>/dev/null; done
+    log_chg dhcpw "sys" "DHCP: 系统 dnsmasq 在跑，模块让位（不碰 67）"
+    date +%s > "$DATA/yield.ts" 2>/dev/null
     stop_dnsmasq
   elif sys_dhcp_any "$USBDS"; then
     # 系统 tethering 已接管：这是「有服务」而不是「端口被占所以判断失败」，记下来
@@ -925,6 +962,26 @@ ap_down() { ap_is_up && return 1; return 0; }
 sys_dhcp_on() {
   [ -n "$1" ] || return 1
   ss -lunp 2>/dev/null | $BB grep -F "$1" | $BB grep -qE ':67\b.*(system_server|dnsmasq)'
+}
+
+# 系统 tethering 的 dnsmasq 是否在跑（不看接口名）。
+# 关键：sys_dhcp_on 用 ss 按接口名 grep，但系统 dnsmasq 绑的是通配 0.0.0.0:67
+# （不带接口名），导致「系统明明在服务、模块却判成没接管」去自建 dnsmasq，
+# 两个 dnsmasq 抢 67、误杀系统进程 → 热点崩溃。所以这里直接看进程：
+# 只要 dns_tether 用户的系统 dnsmasq 活着，模块就必须让位。
+# 用 -x 的 pid 文件排除模块自己拉的那个（同一个二进制、同一个用户）。
+sys_dnsmasq_alive() {
+  # 遍历 /proc 找「系统 tethering 的」dnsmasq 进程（不依赖 ps 版本）。
+  # 区分依据：模块自建的 dnsmasq 命令行带 -x $DATA/dnsmasq.pid（唯一特征），
+  # 系统 tethering 拉的不带。凡是 dnsmasq 但不带这个路径的，就是系统的。
+  local p cmd
+  for p in /proc/[0-9]*; do
+    cmd=$($BB cat "$p/cmdline" 2>/dev/null | $BB tr '\0' ' ')
+    if echo "$cmd" | $BB grep -qE 'dnsmasq' && ! echo "$cmd" | $BB grep -qF "$DATA/dnsmasq.pid"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # 热点接口上系统是否在发 DHCP。热点开着但设备连上没网，先查这个：
@@ -1405,6 +1462,9 @@ usb_dhcp_tick() {
   # 热点没开时不存在 67 竞争，apply 里常规的 sync_dnsmasq 就够了；
   # 这里只处理「热点开着 + USB 对端拿不到地址」这一种情况
   [ "$(ap_running)" = 1 ] || return 0
+  # 系统 tethering 的 dnsmasq 还活着：地址由它发，模块抢 67 既抢不到、
+  # 关热点还会把系统热点 DHCP 一起干掉（v3.1.7 热点崩溃的直接原因），必须让位。
+  sys_dnsmasq_alive && return 0
   # 系统 tethering 已经在服务这条链路，地址由它负责，接管既无必要也抢不到端口
   sys_dhcp_any "$ifs" && return 0
   usb_client_ok && return 0

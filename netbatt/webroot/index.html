@@ -93,12 +93,14 @@ td.name{font-family:inherit}
   <h2>USB 共享（网桥）</h2>
   <div class="stat"><span>状态</span><span id="usbState">--</span></div>
   <div class="stat"><span>地址分配</span><span id="dhcpState">--</span></div>
+  <div class="stat"><span>USB 链路</span><span id="usbNet">--</span></div>
+  <div class="stat"><span>上行网络</span><span id="uplinkState">--</span></div>
   <div class="btns" style="grid-template-columns:1fr 1fr">
     <button id="usbOn">开启共享</button>
     <button id="usbOff">关闭共享</button>
   </div>
   <button class="keep" id="keepUsb" style="width:100%;margin-top:9px">永久保活：关</button>
-  <div class="hint">插上 USB 数据线接到电脑后才会真正生效。USB 共享端固定用 192.168.8 段，接上来的设备固定拿 192.168.8.2，热点那边的设备可以直接访问它的端口。热点开着时插新设备，模块会短暂让出 DHCP 端口把地址发下去再恢复，每一步都有超时，失败会回滚并冷却一段时间。</div>
+  <div class="hint">插上 USB 数据线接到电脑后才会真正生效。USB 共享端固定用 192.168.8 段，接上来的设备固定拿 192.168.8.2，热点那边的设备可以直接访问它的端口。热点开着时插新设备，模块会短暂让出 DHCP 端口把地址发下去再恢复；每次 USB 接入只接管一次，成功以 DHCP ACK 为准。USB 链路与上行网络分开显示：单 Wi-Fi 通道机型开热点时上行会断，那是正常现象，不代表 USB 侧失败。</div>
 </div>
 
 <div class="card">
@@ -188,10 +190,24 @@ function render(s){
   else if(s.usb_online==1) $('#usbState').textContent = '未开启（已插 USB）';
   else $('#usbState').textContent = '未开启（未插 USB）';
   $('#usbState').style.color = s.usb==1 ? 'var(--acc)' : 'var(--dim)';
-  const DHCP_TXT = {idle:'空闲', releasing:'让出 67 中', serving:'分配地址中', restoring:'恢复热点中', cooldown:'已回滚，冷却中'};
+  const DHCP_TXT = {idle:'空闲', hotspot_stopping:'让出热点中', wait_port:'等待 67 释放',
+    dnsmasq_starting:'启动 DHCP 服务', wait_client:'等待 DHCP ACK', dnsmasq_stopping:'撤回 DHCP 服务',
+    hotspot_restoring:'恢复热点中', verify_restored:'校验链路中', cooldown:'已回滚，冷却中'};
   $('#dhcpState').textContent = DHCP_TXT[s.dhcp] || s.dhcp || '--';
-  $('#dhcpState').style.color = (s.dhcp==='serving'||s.dhcp==='restoring'||s.dhcp==='releasing') ? 'var(--acc)'
+  $('#dhcpState').style.color = (s.dhcp && s.dhcp!=='idle' && s.dhcp!=='cooldown') ? 'var(--acc)'
     : (s.dhcp==='cooldown' ? '#e5a00d' : 'var(--dim)');
+  if(s.dhcp_last) $('#dhcpState').title = s.dhcp_last;
+
+  // USB 链路与上行是两件事：单 Wi-Fi 通道机型开热点会让 wlan0 掉线，但 USB 侧照样可用
+  const NET_TXT = {ok:'可用', no_gw:'网关地址已丢', no_peer:'对端未解析',
+    conflict:'与热点网段冲突', down:'无接口', unknown:'未知'};
+  $('#usbNet').textContent = NET_TXT[s.usb_net] || s.usb_net || '--';
+  $('#usbNet').style.color = s.usb_net==='ok' ? 'var(--acc)'
+    : (s.usb_net==='conflict'||s.usb_net==='no_gw' ? '#e5484d' : 'var(--dim)');
+  $('#usbNet').title = s.dhcp_last ? ('上次记录：'+s.dhcp_last) : '';
+  $('#uplinkState').textContent = s.uplink==='ok' ? '正常' : (s.uplink==='down' ? '不可用' : '未知');
+  $('#uplinkState').style.color = s.uplink==='ok' ? 'var(--acc)'
+    : (s.uplink==='down' ? '#e5a00d' : 'var(--dim)');
   pair('#usbOn','#usbOff', s.usb);
 
   keepBtn('#keepWifi', s.keep_wifi, '热点');

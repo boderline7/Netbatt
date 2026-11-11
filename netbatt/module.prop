@@ -1,6 +1,6 @@
 id=netbatt
 name=NetBatt - 热点网段 / 电量控制
-version=v2.3.0
-versionCode=230
+version=v2.4.0
+versionCode=240
 author=local
-description=内置特权应用 NetBatt Console（TETHER_PRIVILEGED）可一键开关热点；统一热点/USB共享网段(默认192.168.8.x)、网页查看连接设备与IP、按阈值控制充电。充电通道自动识别：高通走开关节点(input_suspend)，天玑/vivo 走目标电量节点(keep_chg_soc)。USB 侧 DHCP 由带超时与回滚的调度状态机接管。控制台: http://127.0.0.1:8080
+description=内置特权应用 NetBatt Console（TETHER_PRIVILEGED）可一键开关热点；统一热点/USB共享网段(默认192.168.8.x)、网页查看连接设备与IP、按阈值控制充电。充电通道自动识别：高通走开关节点(input_suspend)，天玑/vivo 走目标电量节点(keep_chg_soc)。USB 侧 DHCP 由调度状态机接管：以 DHCP ACK 判定成功、恢复后校验链路、崩溃后可自恢复、每次接入只接管一次。控制台: http://127.0.0.1:8080

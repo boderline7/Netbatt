@@ -116,12 +116,18 @@ sync_dnsmasq() {
 
   # 永久租约：热点开时会抢走 67 端口，此时没法续租，只能让客户端一次拿到就不再续
   # 池只有一个地址（.2），谁接 USB 谁就固定拿它
-  set -- -k -R -n -K -x "$DATA/dnsmasq.pid" -u dns_tether -l "$DATA/dnsmasq.leases" \
+  # 注意 -L（租约文件）和 -l（日志文件）是两个选项，不能混用
+  # --log-dhcp：把四步交互写进 logd，ACK 判定靠它（文件日志有缓冲延迟，不可实时读）
+  set -- -k -R -n -K -x "$DATA/dnsmasq.pid" -u dns_tether \
+         -L "$DATA/dnsmasq.leases" --log-dhcp \
          -F "$PREFIX.$POOL_START,$PREFIX.$POOL_END,infinite" \
          -O "3,$GW" -O "6,$DNS1,$DNS2" \
          --dhcp-option-force=43,ANDROID_METERED \
          -S "$DNS1" -S "$DNS2"
-  for i in $want; do set -- "$@" -i "$i"; done
+  # --dhcp-broadcast 是可选 tag 的选项：单独写会把后面一个参数吃掉、放末尾又会解析失败，
+  # 必须用 =tag 形式（实测三种写法只有 =tag 可靠）。首次接入时对端还没有 ARP 条目，
+  # 单播 OFFER 依赖邻居解析会发不出去，USB 单客户端场景强制广播无副作用。
+  for i in $want; do set -- "$@" -i "$i" --dhcp-broadcast="$i"; done
 
   nohup /system/bin/dnsmasq "$@" > "$DATA/dnsmasq.log" 2>&1 &
   sleep 1
@@ -221,8 +227,13 @@ apply() {
 # USB 端那台设备的实际地址：优先 DHCP 租约，其次 ARP 邻居，都没有才兜底 .2
 usb_peer() {
   p=""
-  [ -f "$DATA/dnsmasq.leases" ] && p=$($BB awk '$3 ~ /^[0-9]+\./ && $3 !~ /^169\.254/ {print $3; exit}' "$DATA/dnsmasq.leases")
-  [ -z "$p" ] && p=$($BB awk '$6=="ncm0" && $1 !~ /^169\.254/ {print $1; exit}' /proc/net/arp 2>/dev/null)
+  # 邻居表是实时状态，优先；租约文件在 infinite 租约下不一定及时落盘，只能当次选
+  for i in $(usb_ifaces); do
+    [ -n "$p" ] && break
+    p=$($BB awk -v d="$i" '$6==d && $3 ~ /0x[23]/ && $1 !~ /^169\.254/ {print $1; exit}' /proc/net/arp 2>/dev/null)
+  done
+  [ -z "$p" ] && [ -f "$DATA/dnsmasq.leases" ] && \
+    p=$($BB awk '$3 ~ /^[0-9]+\./ && $3 !~ /^169\.254/ {print $3; exit}' "$DATA/dnsmasq.leases")
   [ -z "$p" ] && p="$PREFIX.2"
   echo "$p"
 }
@@ -542,6 +553,10 @@ DHCP_LOCK="$DATA/dhcp.lock"
 DHCP_STATE="$DATA/dhcp.state"
 DHCP_STAMP="$DATA/dhcp.stamp"
 DHCP_APORIG="$DATA/ap.orig"
+DHCP_CYCLE="$DATA/dhcp.cycle"      # 本 USB 连接周期是否已尝试过接管
+DHCP_ACKBASE="$DATA/dhcp.ackbase"  # 接管前 logcat 的 ACK 计数基线，用来排除旧记录
+DHCP_LAST="$DATA/dhcp.last"
+DHCP_NET="$DATA/usb.net"           # USB 链路的落地状态，与上行无关
 
 usb_ifaces() {
   for i in rndis0 ncm0 usb0; do
@@ -559,14 +574,70 @@ port67_busy() {
 }
 port67_free() { port67_busy && return 1; return 0; }
 
-# 插着 USB 且对端已拿到本网段地址（ARP 必须是 REACHABLE/STALE，排除 169.254）
-usb_client_ok() {
+# ---------- 三层判定 ----------
+# 第一层：DHCP 服务真的起来了（进程活着 + 67 被它占住）
+dhcp_serving() {
+  [ -f "$DATA/dnsmasq.pid" ] || return 1
+  kill -0 "$(cat "$DATA/dnsmasq.pid")" 2>/dev/null || return 1
+  port67_busy
+}
+
+# 第二层：DHCP ACK 已发出——这是「地址确实分配成功」的唯一硬证据。
+# dnsmasq 在 Android 上把日志交给 logd（实测 -l 指定的文件只有缓冲后的残片，不实时），
+# 所以只能从 logcat 读。行格式实测：
+#   I/dnsmasq ( 9291): 287454020 DHCPACK(veth0) 192.168.8.2 aa:17:2c:06:b3:5b
+dhcp_ack_lines() {
+  logcat -d -s dnsmasq 2>/dev/null | $BB grep -F "DHCPACK("
+}
+
+dhcp_ack_count() {
+  n=$(dhcp_ack_lines | $BB wc -l 2>/dev/null)
+  [ -z "$n" ] && n=0
+  echo "$n"
+}
+
+# 只认「接管开始之后新增的」ACK，避免把上一次的旧记录当成这次成功
+dhcp_acked() {
+  base=$($BB cat "$DHCP_ACKBASE" 2>/dev/null); [ -z "$base" ] && base=0
+  now=$(dhcp_ack_count)
+  if [ "$now" -gt "$base" ]; then
+    lines=$(dhcp_ack_lines | $BB tail -n $((now - base)))
+  elif [ "$now" -eq "$base" ]; then
+    # 没有新增就是没有新增，绝不能退回去拿旧记录充数
+    return 1
+  else
+    # now < base：logcat 缓冲区已经滚过一轮，只能看最近几条
+    lines=$(dhcp_ack_lines | $BB tail -n 20)
+  fi
+  [ -z "$lines" ] && return 1
   for i in $(usb_ifaces); do
-    $BB awk -v d="$i" -v p="$PREFIX." \
-      '$6==d && $3 ~ /0x[23]/ && $1 !~ /^169\.254/ && index($1,p)==1 {ok=1} END{exit !ok}' /proc/net/arp && return 0
+    echo "$lines" | $BB grep -qF "DHCPACK($i) $PREFIX." && return 0
   done
   return 1
 }
+
+# 第三层：客户端已参与网络通信。
+# 这里必须读 ip neigh 的 NUD 状态；/proc/net/arp 的 Flags 只有 0x0/0x2，
+# 没有 REACHABLE/STALE 之类的状态位，拿它当「已解析」是错的。
+usb_neigh_ok() {
+  for i in $(usb_ifaces); do
+    ip neigh show dev "$i" 2>/dev/null | $BB awk -v p="$PREFIX." '
+      index($1,p)==1 && $1 !~ /^169\.254/ && ($0 ~ /REACHABLE|STALE|DELAY|PROBE|PERMANENT/) {ok=1}
+      END{exit !ok}' && return 0
+  done
+  return 1
+}
+
+# 兼容保留：ARP 表里出现本网段地址，只算「有过交互」的弱信号，不作为成功依据
+usb_arp_seen() {
+  for i in $(usb_ifaces); do
+    $BB awk -v d="$i" -v p="$PREFIX." '$6==d && $3 ~ /0x[23]/ && $1 !~ /^169\.254/ && index($1,p)==1 {ok=1} END{exit !ok}' /proc/net/arp && return 0
+  done
+  return 1
+}
+
+# 客户端已经能正常用（日常判据：邻居表里有本网段地址且已解析）
+usb_client_ok() { usb_neigh_ok; }
 
 # wait_for <秒> <函数>：轮询直到成功或超时，不靠固定 sleep 猜
 wait_for() {
@@ -601,6 +672,79 @@ dhcp_cooling() {
   [ $(( $(date +%s) - last )) -lt 180 ]
 }
 
+# ---------- 落地校验 ----------
+# 「临时分配成功」不等于「长期可用」。热点重新接管 DHCP 之后必须回头确认三件事：
+#   a) USB 接口的网关地址还在（系统有没有顺手把接口地址改掉）
+#   b) 热点网段有没有和 USB 网段撞车（撞了就是两个 DHCP 抢同一个 /24）
+#   c) 客户端是否还能解析到（infinite 租约不等于服务端重新接管后仍认可这个地址）
+usb_net_state() {
+  ifs=$(usb_ifaces); [ -z "$ifs" ] && { echo down; return 0; }
+
+  gwok=0
+  for i in $ifs; do
+    ip -o -4 addr show dev "$i" 2>/dev/null | $BB grep -q " $GW/" && gwok=1
+  done
+  [ "$gwok" = 1 ] || { echo no_gw; return 0; }
+
+  clash=$(ip -o -4 addr show 2>/dev/null | $BB awk -v p="$PREFIX." -v usb="$ifs" '
+    index($4,p)==1 {
+      d=$2; own=0
+      n=split(usb,a," "); for(i=1;i<=n;i++) if(a[i]==d) own=1
+      if(!own){print d; exit}
+    }')
+  [ -n "$clash" ] && { echo conflict; return 0; }
+
+  usb_neigh_ok || { echo no_peer; return 0; }
+  echo ok
+}
+
+# 上行（能不能上网）和 USB 链路是两个独立指标：单 Wi-Fi 通道机型开热点会让 wlan0 掉线，
+# 那不是 USB DHCP 的失败，不能混成一个结论。60 秒缓存，避免每轮都 ping。
+uplink_state() {
+  now=$(date +%s)
+  ts=$($BB cat "$DATA/uplink.ts" 2>/dev/null); [ -z "$ts" ] && ts=0
+  if [ $((now - ts)) -lt 60 ]; then
+    r=$($BB cat "$DATA/uplink.res" 2>/dev/null); [ -z "$r" ] && r=unknown
+    echo "$r"; return 0
+  fi
+  if ping -c 1 -W 2 223.5.5.5 >/dev/null 2>&1 || ping -c 1 -W 2 114.114.114.114 >/dev/null 2>&1; then
+    echo ok > "$DATA/uplink.res"
+  else
+    echo down > "$DATA/uplink.res"
+  fi
+  echo "$now" > "$DATA/uplink.ts"
+  $BB cat "$DATA/uplink.res"
+}
+
+# ---------- 崩溃恢复 ----------
+# 断电、进程被 kill、USB 突然拔出都可能停在中间阶段，正常流程里的回滚不会执行。
+# 所以每次启动都要独立检查一次：以真实系统状态为准，不盲信阶段文件。
+dhcp_recover() {
+  st=$($BB cat "$DHCP_STATE" 2>/dev/null); [ -z "$st" ] && st=idle
+  [ "$st" = idle ] && return 0
+
+  # 1) 残留的 dnsmasq 一律清掉（按真实进程判断，不看阶段文件）
+  stop_dnsmasq
+  wait_for 6 port67_free
+
+  # 2) 热点按介入前的真实记录还原：原本开着才开回来，原本关着不动
+  orig=$($BB cat "$DHCP_APORIG" 2>/dev/null)
+  if [ "$orig" = 1 ] && [ "$(ap_running)" = 0 ]; then
+    hs wifi 1
+    wait_for 15 port67_busy
+  fi
+
+  # 3) 清锁与阶段，留一条恢复记录
+  rm -rf "$DHCP_LOCK"
+  echo idle > "$DHCP_STATE"
+  echo "recovered:$st" > "$DHCP_LAST"
+}
+
+# 同一个 USB 连接周期只允许一次接管：反复插拔才会重新进入，避免来回关热点
+usb_cycle_reset() {
+  [ "$(usb_online)" = 1 ] || rm -f "$DHCP_CYCLE"
+}
+
 usb_dhcp_fail() {
   stop_dnsmasq
   # USB 拔了不算失败：静默收场，不留冷却
@@ -609,17 +753,28 @@ usb_dhcp_fail() {
     dhcp_unlock
     return 0
   fi
-  echo "fail:$1" > "$DATA/dhcp.last"
+  echo "fail:$1" > "$DHCP_LAST"
   echo cooldown > "$DHCP_STATE"
   # 回滚：先让出 67，再把热点还原成本来的样子
   wait_for 6 port67_free
   [ "$($BB cat "$DHCP_APORIG" 2>/dev/null)" = 1 ] && hs wifi 1
+  wait_for 10 port67_busy
   date +%s > "$DHCP_STAMP"
   dhcp_unlock
   return 1
 }
 
+# 上一轮被强杀留下的锁：持锁进程没了、锁又过期，就地恢复，不必等重启
+usb_dhcp_reap() {
+  [ -d "$DHCP_LOCK" ] || return 0
+  ts=$($BB cat "$DHCP_LOCK/ts" 2>/dev/null); [ -z "$ts" ] && ts=0
+  [ $(( $(date +%s) - ts )) -lt 120 ] && return 0
+  dhcp_recover
+}
+
 usb_dhcp_tick() {
+  usb_cycle_reset
+  usb_dhcp_reap
   [ "$(usb_online)" = 1 ] || return 0
   [ "$(usb_off_flag)" = 0 ] || return 0
   ifs=$(usb_ifaces); [ -z "$ifs" ] && return 0
@@ -627,39 +782,60 @@ usb_dhcp_tick() {
   # 这里只处理「热点开着 + USB 对端拿不到地址」这一种情况
   [ "$(ap_running)" = 1 ] || return 0
   usb_client_ok && return 0
+  # 本周期已经试过：后续触发只更新状态，不再重复开关热点
+  [ -f "$DHCP_CYCLE" ] && return 0
   dhcp_cooling && return 0
   dhcp_lock || return 0
+  touch "$DHCP_CYCLE"
 
   # 记录介入前热点是否真的在开，原来关着就不擅自打开
   ap_orig=$(ap_running)
   echo "$ap_orig" > "$DHCP_APORIG"
 
   # 1) 让系统释放 67
-  echo releasing > "$DHCP_STATE"
+  echo hotspot_stopping > "$DHCP_STATE"
   [ "$ap_orig" = 1 ] && hs wifi 0
+  echo wait_port > "$DHCP_STATE"
   wait_for 10 port67_free || { usb_dhcp_fail "release_timeout"; return 1; }
 
-  # 2) 临时起 dnsmasq，只服务 USB 侧
-  echo serving > "$DHCP_STATE"
+  # 2) 临时起 dnsmasq，只服务 USB 侧；先记 ACK 基线，只认新增的
+  dhcp_ack_count > "$DHCP_ACKBASE"
+  echo dnsmasq_starting > "$DHCP_STATE"
   sync_dnsmasq "$ifs"
-  if ! wait_for 3 port67_busy; then
+  if ! wait_for 3 dhcp_serving; then
     usb_dhcp_fail "dnsmasq_start_failed"
     return 1
   fi
 
-  # 3) 等对端真的拿到地址，等不到就回滚
-  wait_for 25 usb_client_ok || { usb_dhcp_fail "no_client_ip"; return 1; }
+  # 3) 以 DHCPACK 为成功依据；邻居解析只作辅助验证
+  echo wait_client > "$DHCP_STATE"
+  if wait_for 25 dhcp_acked; then
+    :
+  elif usb_neigh_ok; then
+    # 邻居已解析但没抓到 ACK：地址确实下发过，如实记一笔，不推翻结果
+    echo ack_missing > "$DHCP_LAST"
+  else
+    usb_dhcp_fail "no_client_ip"
+    return 1
+  fi
 
   # 4) 撤掉 dnsmasq，确认 67 真的释放
+  echo dnsmasq_stopping > "$DHCP_STATE"
   stop_dnsmasq
-  echo restoring > "$DHCP_STATE"
   wait_for 6 port67_free
 
   # 5) 还原热点并等系统 DHCP 重新接管 67
+  echo hotspot_restoring > "$DHCP_STATE"
   if [ "$ap_orig" = 1 ]; then
     hs wifi 1
     wait_for 15 port67_busy
   fi
+
+  # 6) 落地校验：最容易「当场成功、长期偶发失效」的一步
+  echo verify_restored > "$DHCP_STATE"
+  nets=$(usb_net_state)
+  echo "$nets" > "$DHCP_NET"
+  [ "$nets" = ok ] || echo "verify:$nets" > "$DHCP_LAST"
 
   echo idle > "$DHCP_STATE"
   date +%s > "$DHCP_STAMP"
@@ -716,6 +892,8 @@ status_json() {
 "batt":$(batt_json),"ap":$(ap_running),
 "usb":$(usb_up),"usb_online":$(usb_online),"keep_wifi":$KEEP_WIFI,"keep_usb":$KEEP_USB,
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
+"dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
+"usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",
 "web":"http://$GW:$PORT","dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
 EOF
 }

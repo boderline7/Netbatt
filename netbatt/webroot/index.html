@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>NetBatt 控制台</title>
 <style>
 :root{
@@ -65,6 +68,9 @@ td.name{font-family:inherit}
 .slabel{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--dim);margin-top:10px}
 .slabel b{font-size:15px;color:var(--fg);font-family:ui-monospace,Consolas,monospace}
 .hint{font-size:12.5px;color:var(--dim);margin-top:8px}
+.logbox{background:#0b0e12;border:1px solid var(--line);border-radius:9px;padding:10px 11px;margin:0 0 12px;
+  font:12px/1.55 ui-monospace,Consolas,"Noto Sans Mono",monospace;color:#c8d3df;
+  max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;-webkit-overflow-scrolling:touch}
 .btns{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px}
 #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
   background:#2b3440;color:#fff;padding:10px 18px;border-radius:22px;font-size:13.5px;
@@ -100,7 +106,32 @@ td.name{font-family:inherit}
     <button id="usbOff">关闭共享</button>
   </div>
   <button class="keep" id="keepUsb" style="width:100%;margin-top:9px">永久保活：关</button>
-  <div class="hint">插上 USB 数据线接到电脑后才会真正生效。USB 共享端固定用 192.168.8 段，接上来的设备固定拿 192.168.8.2，热点那边的设备可以直接访问它的端口。热点开着时插新设备，模块会短暂让出 DHCP 端口把地址发下去再恢复；每次 USB 接入只接管一次，成功以 DHCP ACK 为准。USB 链路与上行网络分开显示：单 Wi-Fi 通道机型开热点时上行会断，那是正常现象，不代表 USB 侧失败。</div>
+  <div class="hint">默认交给系统共享（TetheringManager），网段由系统决定（实测 192.168.16.x），地址分配与 NAT 也由系统负责，兼容性最好；对端拿不到地址时才回退到模块自建，此时固定 192.168.8 段。热点那边的设备可以直接访问对端设备的端口。热点开着时插新设备，模块会短暂让出 DHCP 端口把地址发下去再恢复；每次 USB 接入只接管一次，成功以 DHCP ACK 为准。USB 链路与上行网络分开显示：单 Wi-Fi 通道机型开热点时上行会断，那是正常现象，不代表 USB 侧失败。</div>
+</div>
+
+<div class="card">
+  <h2>USB 网络类型</h2>
+  <div class="stat"><span>当前生效</span><span id="usbFunc">--</span></div>
+  <div class="btns" style="grid-template-columns:repeat(4,1fr)">
+    <button data-net="auto">自动</button>
+    <button data-net="rndis">RNDIS</button>
+    <button data-net="ncm">NCM</button>
+    <button data-net="ecm">ECM</button>
+  </div>
+  <div class="hint">对端完全看不到网卡时换这里，跟 DHCP 无关。RNDIS 兼容性最好（随身 WiFi 基本都是它），NCM 要求对端有 cdc_ncm 驱动，ECM 要求本机存在该 function。注意：部分 ROM（vivo 就是）不接受直接改 sys.usb.config，会建出 function 目录却不链接进配置，内核不建网卡，此时这四项切了也没用，必须走系统共享。上方共享方式显示「系统共享」才说明网卡真的建出来了。</div>
+</div>
+
+<div class="card">
+  <h2>无线 ADB</h2>
+  <div class="stat"><span>状态</span><span id="adbState">--</span></div>
+  <div class="stat"><span>监听端口</span><span id="adbPort">--</span></div>
+  <div class="stat" id="adbResidueRow" style="display:none"><span>persist 残留</span><span id="adbResidue" style="color:#e5a00d">--</span></div>
+  <div class="btns" style="grid-template-columns:1fr 1fr">
+    <button id="adbOn">开启</button>
+    <button id="adbOff">关闭</button>
+  </div>
+  <button class="keep" id="adbClear" style="width:100%;margin-top:9px;display:none">清理 persist 残留</button>
+  <div class="hint" id="adbAddr">开启后 adbd 同时监听 TCP，重启自动恢复；不写 persist 属性，开发者选项可以正常进入。</div>
 </div>
 
 <div class="card">
@@ -160,6 +191,18 @@ td.name{font-family:inherit}
   <div class="hint">当前转发目标：<span id="fwdTarget">--</span>（自动跟随）</div>
 </div>
 
+<div class="card">
+  <h2>运行日志</h2>
+  <div class="stat"><span>占用</span><span id="logSize">--</span></div>
+  <div class="hint" style="margin:0 0 10px">模块自己记的运行记录，车机上不用 adb 也能看。写满上限后滚成 netbatt.log.1，只保留一份。</div>
+  <pre class="logbox" id="logBox">加载中…</pre>
+  <div class="btns">
+    <button id="logReload">刷新</button>
+    <button id="logDl">下载</button>
+    <button class="danger" id="logClear">清空</button>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -210,6 +253,41 @@ function render(s){
     : (s.uplink==='down' ? '#e5a00d' : 'var(--dim)');
   pair('#usbOn','#usbOff', s.usb);
 
+  // USB 网络类型：显示实际生效的 function，高亮的是配置值（auto 就是自动）
+  const NET_NAME = {rndis:'RNDIS', ncm:'NCM', ecm:'ECM'};
+  const elFunc = $('#usbFunc');
+  // manual 且 linked=0：属性设了、function 目录也建了，但没链接进 configs，
+  // 内核不会建网卡——vivo 这类 ROM 就是这样，必须走系统共享。
+  const linkWarn = (s.usb_mode === 'manual' && s.usb_linked == 0);
+  elFunc.textContent = (NET_NAME[s.usb_func] || s.usb_func || '--')
+    + (s.usb_net_cfg==='auto' ? '（自动）' : '')
+    + (s.usb_mode === 'native' ? ' · 系统共享'
+       : s.usb_mode === 'manual' ? ' · 模块自建' : '')
+    + (linkWarn ? ' · 未链接' : '');
+  elFunc.style.color = linkWarn ? '#e5a00d' : '';
+  document.querySelectorAll('button[data-net]').forEach(b=>{
+    b.classList.toggle('active', b.dataset.net === s.usb_net_cfg);
+  });
+
+  const ADB_TXT = {0:'已关闭', 1:'监听中', 2:'已配置，未监听'};
+  $('#adbState').textContent = ADB_TXT[s.adb_tcp] || '--';
+  $('#adbState').style.color = s.adb_tcp==1 ? 'var(--acc)'
+    : (s.adb_tcp==2 ? '#e5a00d' : 'var(--dim)');
+  $('#adbPort').textContent = s.adb_port || '--';
+  $('#adbOn').classList.toggle('active', s.adb_tcp==1);
+
+  // 老模块留下的 persist 属性：不清掉，开发者选项一直进不去
+  const resid = s.adb_persist || '';
+  $('#adbResidueRow').style.display = resid ? 'flex' : 'none';
+  $('#adbClear').style.display = resid ? 'block' : 'none';
+  $('#adbResidue').textContent = resid ? ('persist.adb.tcp.port=' + resid) : '';
+  if(s.adb_tcp==1 && s.adb_port && s.ifaces.length){
+    const urls = s.ifaces.map(i=>i.ip.split('/')[0]+':'+s.adb_port);
+    $('#adbAddr').textContent = '连接地址：' + urls.join('    ');
+  }else{
+    $('#adbAddr').textContent = '开启后 adbd 同时监听 TCP，重启自动恢复；不写 persist 属性，开发者选项可以正常进入。';
+  }
+
   keepBtn('#keepWifi', s.keep_wifi, '热点');
   keepBtn('#keepUsb', s.keep_usb, 'USB 共享');
 
@@ -240,7 +318,34 @@ function render(s){
   $('#chgch').textContent = chgDesc(b);
   $('#web').textContent = s.web;
   $('#fwdTarget').textContent = s.target || '--';
+  $('#logSize').textContent = bytes(s.log_size) + ' / ' + bytes(s.log_max)
+    + (s.log_old ? '（旧档 ' + bytes(s.log_old) + '）' : '');
   renderFwd(s.fwd);
+}
+
+// 日志占用：字节数直接给出来，别让人自己算
+function bytes(n){
+  n = +n || 0;
+  if(n >= 1048576) return (n/1048576).toFixed(2) + ' MB';
+  if(n >= 1024) return (n/1024).toFixed(1) + ' KB';
+  return n + ' B';
+}
+
+// 只读最近 150 行：整个文件动辄几 MB，没必要每次全拉
+async function loadLog(){
+  const box = $('#logBox');
+  if(!box) return;
+  try{
+    const r = await fetch('/cgi-bin/api.sh?a=log&n=150', {cache:'no-store'});
+    if(!r.ok) throw new Error(r.status);
+    const t = await r.text();
+    // 用户往上翻的时候不要强行拽回底部
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 32;
+    box.textContent = t.trim() || '（暂无记录）';
+    if(nearBottom) box.scrollTop = box.scrollHeight;
+  }catch(e){
+    box.textContent = '读取失败：' + e.message;
+  }
 }
 
 // 充电通道说明：骁龙走开关节点，天玑(vivo)走目标电量节点
@@ -383,6 +488,39 @@ $('#apOff').addEventListener('click', ()=>setShare('wifi',false));
 $('#usbOn').addEventListener('click', ()=>setShare('usb',true));
 $('#usbOff').addEventListener('click', ()=>setShare('usb',false));
 
+// USB 网络类型切换：对端看不到网卡时是这里的问题，不是 DHCP
+document.querySelectorAll('button[data-net]').forEach(b=>{
+  b.onclick = async ()=>{
+    try{
+      const r = await api('usbnet', {net:b.dataset.net});
+      if(!r || !r.ok){
+        toast(r && r.error==='func_missing' ? '本机不支持该网络功能' : '切换失败');
+        return;
+      }
+      toast('USB 网络：' + (b.dataset.net==='auto' ? '自动' : b.dataset.net.toUpperCase()));
+      setTimeout(refresh, 2600);
+    }catch(e){ toast('切换失败'); }
+  };
+});
+
+async function setAdb(on){
+  try{
+    const r = await api('adbtcp', {on: on?1:0});
+    if(!r || !r.ok){ toast('操作失败'); return; }
+    toast(on ? '无线 ADB 已开启' : '无线 ADB 已关闭');
+    setTimeout(refresh, 1600);
+  }catch(e){ toast('操作失败'); }
+}
+$('#adbOn').addEventListener('click', ()=>setAdb(true));
+$('#adbOff').addEventListener('click', ()=>setAdb(false));
+$('#adbClear').addEventListener('click', async ()=>{
+  try{
+    const r = await api('clearpersist', {});
+    toast(r && r.ok ? '已清理，重启后开发者选项恢复' : '清理失败');
+    setTimeout(refresh, 1200);
+  }catch(e){ toast('清理失败'); }
+});
+
 async function toggleKeep(key, sel){
   const el=$(sel);
   const v = el._on ? 0 : 1;
@@ -401,11 +539,34 @@ $('#chgStart').addEventListener('click', async ()=>{ await api('chg',{op:'start'
 $('#chgRestart').addEventListener('click', async ()=>{ await api('chg',{op:'restart'}); toast('已重启充电控制'); setTimeout(refresh,1600); });
 $('#chgStop').addEventListener('click', async ()=>{ await api('chg',{op:'stop'}); toast('已停止并恢复充电'); setTimeout(refresh,900); });
 
+$('#logReload').addEventListener('click', loadLog);
+// full=1 带附件头，浏览器直接存成 netbatt.log
+$('#logDl').addEventListener('click', ()=>{ window.location.href = '/cgi-bin/api.sh?a=log&full=1'; });
+// 不用 confirm：WebView 壳里没设 WebChromeClient 时 confirm 会被直接吞掉，按钮就像坏了
+let logArm = 0;
+$('#logClear').addEventListener('click', async ()=>{
+  const b = $('#logClear');
+  if(!logArm){
+    logArm = 1;
+    b.textContent = '再点一次确认';
+    b.classList.add('on');
+    setTimeout(()=>{ if(logArm){ logArm = 0; b.textContent = '清空'; b.classList.remove('on'); } }, 4000);
+    return;
+  }
+  logArm = 0;
+  b.textContent = '清空';
+  b.classList.remove('on');
+  try{ await api('logclear'); toast('日志已清空'); }catch(e){ toast('清空失败'); }
+  loadLog();
+});
+
 if(bridge()){ $('#apHint').textContent = '当前在 APP 内，直接调用特权接口开关热点。'; }
 paint('#pcap','#pcapv');
 paint('#rcap','#rcapv');
 refresh();
+loadLog();
 setInterval(refresh, 3000);
+setInterval(()=>{ if(!document.hidden) loadLog(); }, 15000);
 </script>
 </body>
 </html>

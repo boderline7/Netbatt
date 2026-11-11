@@ -5,9 +5,11 @@
 ## 功能
 
 - **热点管理** — 网页开关热点、查看已连接设备，被系统关闭后自动恢复。
-- **USB 共享** — 打开 NCM 共享，USB 侧固定在 `192.168.8.0/24`，与热点侧双向互通。
+- **USB 共享** — 默认交给系统 tethering（兼容性最好，对端所见与插随身 WiFi 一致），系统没建出接口时才回退模块自建；网卡出现后控制台可在对端用 `http://<共享接口IP>:8080` 打开。
 - **端口转发** — 热点侧访问本机指定端口的流量转到 USB 侧设备，默认不转发，端口可增删。
 - **充电控制** — 按电量上下限自动启停充电，带温度保护，显示实时充放电功率。
+- **无线 ADB** — 网页开关 adbd 的 TCP 端口，重启自动恢复，不写 `persist` 属性。
+- **运行日志** — 自带 3MB 滚动日志，网页可看可整份下载，车机上不要 adb 也能排障。
 
 ## 充电通道
 
@@ -21,6 +23,37 @@
 - `CHG_MODE=auto`（默认）按节点可写性自动选；`switch` / `soc` 可强制指定。
 - soc 通道下「停止」写 5、「恢复」写 100。接管前的节点原值记在 `/data/adb/netbatt/soc.orig`，停用控制器会还原，不会顶掉系统自带的充电保护。
 - 其它机型节点不同的话，改 `config.sh` 里的 `CHG_SWITCH`（switch 通道）或 `SOC_PATH`（soc 通道）即可。探测顺序：`qcom-battery/input_suspend` → `battery/input_suspend` → `charger/charging_enabled` → `battery/charging_enabled` → `battery/batt_slate_mode`。
+
+## USB 网络类型：对端看不到网卡先改这里
+
+对端完全看不到网卡，不是 DHCP 问题，是手机这端给的 USB 网络 class 对端内核不认。同一根线插电脑正常、插车机连网卡都不出现，就是这种情况。
+
+| 类型 | 对端要求 | 兼容性 |
+|---|---|---|
+| RNDIS | `rndis_host` | 最好，Android/Windows/Linux 都有，随身 WiFi 基本都是这一类 |
+| NCM | `cdc_ncm` | Windows 10+ 自带；很多车机和老 Linux 没有 |
+| ECM | `cdc_ether` | 对端表现为 `eth*`，但手机 gadget 必须存在 `ecm` function |
+
+默认 `auto`，按 `rndis > ecm > ncm` 挑一个。网页上可以直接指定。指定的类型本机不存在时接口会拒绝切换，不会把 USB 弄断。
+
+**但这台机器上直接改 `sys.usb.config` 是空转。** 实测（V2121A / Android 11 / mt6893）：
+
+```
+setprop sys.usb.config rndis,adb
+  → getprop 回显 rndis,adb          ← 看起来成功了
+  → /config/usb_gadget/g1/functions/ 多出 rndis.gs4   ← 目录也建了
+  → /config/usb_gadget/g1/configs/b.1/ 仍然是
+      f1 → mtp.gs0, f2 → mass_storage.usb1, f3 → ffs.adb   ← 没链接
+  → ip link 里没有 rndis0 / usb0     ← 内核根本没建网卡
+```
+
+function 只有在被链接进 configuration 并在 UDC 绑定时才 bind、才创建 netdev。这条链接是厂商 HAL 做的，写属性不会触发。所以对端什么都看不到，`sys.usb.config` 却骗你说成功了。
+
+走系统 `TetheringManager` 就正常：接口立刻出现，地址由系统分配（每次网段不同，实测 192.168.16.x / 192.168.83.x）。
+
+因此 v2.8.0 起 **USB 共享一律先走系统 tethering**，`wait_for 12` 内没建出接口才回退自建。`USB_NATIVE=1`（默认）表示只信系统、不回退；改 `0` 才允许回退。回退的那条路只对接受 `sys.usb.config` 的 ROM 有效。
+
+网页「USB 网络类型」那行的后缀就是这里的状态：`系统共享` = 网卡真建出来了；`模块自建 · 未链接` = 属性设了但没生效，只有这种 ROM 才会出现。
 
 ## USB 侧 DHCP：为什么只能临时接管
 
@@ -145,6 +178,33 @@ UNCONN  0  0  0.0.0.0%ap0:67  0.0.0.0:*  users:(("system_server",pid=1439,fd=681
 
 `status` 里的 `sys_dhcp` 字段表示当前是否让位（1 = 系统在服务）。两种场景下 `clients` / `target` 都能正确定位对端，端口转发照常生效。
 
+## 无线 ADB
+
+开关只写运行时属性 `service.adb.tcp.port`，不碰 `persist.adb.tcp.port`：
+
+```
+setprop service.adb.tcp.port 5555
+setprop ctl.restart adbd
+```
+
+- 「永久」由模块在开机后恢复（`adb_tcp_restore`，等 adbd 真起来再改端口，太早设会被 init 覆盖）。
+- 不写 `persist` 那条的原因：vivo 的开发者选项读到它非空就直接拒绝进入；而且禁用 Magisk 模块也不会清掉它，属性还留在 persist 分区里。页面检测到残留会显示「清理 persist 残留」按钮，同时删 `/data/property/persist.adb.tcp.port` 文件和内存属性——只删内存属性重启会从文件里读回来。
+- adbd 监听 `0.0.0.0`，热点开着时直接连热点接口地址的 5555，不依赖外部 Wi-Fi，也就绕开了「开热点把无线 adb 顶掉」的问题。
+- 如果装过别的「ADB over WiFi 常驻」模块（例如 id 为 `adb_tcp_5555` 的），它的 `post-fs-data.sh` 每开机会重新写回 `persist.adb.tcp.port=5555`，本模块清掉也会被它写回来，必须先把那个模块卸载。只停用不够——停用只是不执行脚本，已经写进 persist 分区的属性还在。
+- 页面显示三态：已关闭 / 监听中 / 已配置未监听。最后一种说明 adbd 没起来或被 ROM 顶掉了。
+
+## 运行日志
+
+车机上没有 adb、也不方便导 logcat，所以模块自己记一份，落在 `/data/adb/netbatt/`：
+
+- 当前文件 `netbatt.log`，写满 `LOG_MAX`（默认 3145728 字节，即 3MB）后滚成 `netbatt.log.1`，只保留一份历史，磁盘占用最多约 6MB。
+- 记录的是状态跳变，不是每轮快照：`loop.sh` 每 5 秒跑一次 `apply`，`log_chg` 用 `$DATA/logv.*` 存上次取值，值不变就不写。幂等动作（保活重复拉起、DHCP 轮询）因此不会把 3MB 刷满。
+- 内容：启动快照（版本、Android 版本、平台、gadget functions、充电通道）、网段与下游接口变化、USB 功能切换与结果、dnsmasq 起停与未监听原因、DHCP 接管每一步与失败原因、USB 链路状态、充电结论变化、ADB / 网段 / 阈值 / 转发等用户动作。
+- 网页「运行日志」显示最近 150 行，可刷新、清空、整份下载（`/cgi-bin/api.sh?a=log&full=1`，带附件头，直接存成 `netbatt.log`）。
+- 走纯文本接口，不占 JSON：`a=log&n=200` 取尾部，`a=logclear` 清空。
+
+`log_clear` 会同时删掉 `logv.*`，所以清空后的第一次 `apply` 会重新记一遍当前状态，不会留下“状态没变所以一直不记”的空窗。
+
 ## 安装
 
 1. 将 `netbatt/` 目录内容打成 zip，**条目必须是正斜杠**（用 PowerShell `Compress-Archive` 会写反斜杠，装上去目录结构全废）。
@@ -169,7 +229,7 @@ UNCONN  0  0  0.0.0.0%ap0:67  0.0.0.0:*  users:(("system_server",pid=1439,fd=681
 
 USB DHCP 的验证进度：V2121A 上跑通了「热点关闭 + USB 共享」这条主路径——dnsmasq 常驻在 `rndis0:67`，电脑完成 `DISCOVER → OFFER → REQUEST → ACK` 并拿到 `192.168.8.5`，网页识别到客户端、`usb_net=ok`。
 
-**未验证的是「热点开着时插新设备 → 六步接管」**：这次测试全程热点处于关闭状态，接管流程没有触发（V2121A 的 USB 网卡是 `rndis0` 而非 `ncm0`，但接口名已覆盖）。三层判定（构造 DHCPREQUEST 拿真实 `DHCPACK`、验证「无新增不认旧记录」）、锁的互斥与重入、超时精度、冷却窗口、崩溃恢复与周期锁，都是函数级验证过的。
+**未验证的是「热点开着时插新设备 → 六步接管」**：这次测试全程热点处于关闭状态，接管流程没有触发（V2121A 的 USB 网卡是 `rndis0` 而非 `ncm0`——v2.6.0 起默认就走 RNDIS，不再写死 ncm）。三层判定（构造 DHCPREQUEST 拿真实 `DHCPACK`、验证「无新增不认旧记录」）、锁的互斥与重入、超时精度、冷却窗口、崩溃恢复与周期锁，都是函数级验证过的。
 
 另外用 `veth` + 网络命名空间在本机造过链路：dnsmasq 侧能看到 `DHCPDISCOVER → DHCPOFFER`，但客户端收不到回包（虚拟链路 + Android 网络栈的限制，`veth1` 收发计数为 0），所以**广播修复的实际效果只能在真实 `ncm0` 上确认**。
 
@@ -181,3 +241,5 @@ USB DHCP 的验证进度：V2121A 上跑通了「热点关闭 + USB 共享」这
 - USB 口供电通常只有 5V/0.5A，热点与亮屏同时运行时电量可能负增长。
 - soc 通道机型上，部分平台的 `current_now` 充电时为负值，模块已按 `status` 统一符号；仍有个别平台满电后停在 `Discharging` 数秒才切 `Charging`，属充电 IC 的保护延迟。
 - 热点接口名自动匹配 `wlan2 / ap0 / swlan0 / softap0 / wlan1`，并回退查 `iw dev` 里的 AP 模式接口；完全自定义命名的 ROM 仍可能漏判。
+- USB 网络类型只能换手机这端给的 class，对端内核没有对应驱动时无解（手机侧没有权限替换对端驱动栈）。
+- 无线 ADB 监听所有接口且不做来源限制，同一网段内任何设备都能连；内网使用可以接受，别接到不可信的网络。

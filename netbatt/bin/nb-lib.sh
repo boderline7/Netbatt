@@ -33,6 +33,22 @@ KEEP_WIFI=0
 KEEP_USB=0
 # 热点设备访问本机这个端口时，转发给 USB 端那台固定设备
 FWDPORT=18765
+# USB 网络功能类型。对端看不到网卡时换的就是这里：
+#   rndis  兼容性最好，Android/Windows/Linux 都认，随身 WiFi 基本都是这一类
+#   ncm    需要对端有 cdc_ncm 驱动，Windows 10+ 自带，很多车机没有
+#   ecm    对端表现为 cdc_ether(eth*)，但本机 gadget 必须存在该 function
+#   auto   按对端兼容性排序挑一个真实存在的
+USB_NET=auto
+# 1=交给系统 tethering 全权负责（网段由系统选）；0=允许在系统失败时退回自建
+# 默认 1：实测 vivo 这类 ROM 直接写 sys.usb.config 只建 functions 目录、
+# 不链接进 configs，内核不建网卡，对端永远看不到设备。系统 tethering 走厂商 HAL 才有效。
+USB_NATIVE=1
+# 无线 ADB。只设 service.adb.tcp.port（重启即失效），持久化由本模块开机恢复，
+# 绝不写 persist.adb.tcp.port —— 那条属性会让 vivo 的开发者选项直接进不去
+ADB_TCP=0
+ADB_PORT=5555
+# 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
+LOG_MAX=3145728
 
 if [ ! -f "$CFG" ]; then
   cat > "$CFG" <<EOC
@@ -54,6 +70,11 @@ CHG_SOC_ON=$CHG_SOC_ON
 KEEP_WIFI=$KEEP_WIFI
 KEEP_USB=$KEEP_USB
 FWDPORT=$FWDPORT
+USB_NET=$USB_NET
+USB_NATIVE=$USB_NATIVE
+ADB_TCP=$ADB_TCP
+ADB_PORT=$ADB_PORT
+LOG_MAX=$LOG_MAX
 EOC
 fi
 
@@ -67,7 +88,20 @@ CHG_SOC_ON=100
 EOC
 fi
 
+# 升级上来的老配置缺新键时补默认值；已有的键一律不动
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "LOG_MAX=3145728"; do
+  $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
+done
+
 . "$CFG"
+
+# v2.8.0 把默认路径切成系统 tethering。老配置里的 USB_NATIVE=0 是上一版默认值
+# 灌进去的，不是用户主动选的，所以升级时按 seed 标记纠正一次；之后用户自己改的照旧。
+if ! $BB grep -q '^CFG_SEED=' "$CFG" 2>/dev/null; then
+  USB_NATIVE=1
+  $BB sed -i 's/^USB_NATIVE=.*/USB_NATIVE=1/' "$CFG" 2>/dev/null
+  echo "CFG_SEED=1" >> "$CFG"
+fi
 
 # 老配置的地址池是 2..2（单地址），实测 dnsmasq 会一直回 no address available，
 # 升级上来的配置必须一起纠正，否则只有全新安装才正常
@@ -77,6 +111,82 @@ if [ -n "$POOL_START" ] && [ -n "$POOL_END" ] && [ "$POOL_END" -le "$POOL_START"
 fi
 
 GW="$PREFIX.1"
+
+# ---------- 运行日志 ----------
+# 车机上没法 adb 也导不出 logcat，模块自己落一份到 /data/adb/netbatt。
+# 单文件到 LOG_MAX（默认 3MB）就滚成 netbatt.log.1，只保留一份历史，
+# 磁盘占用最多约 6MB。网页「运行日志」能直接看，也能整份下载。
+LOG="$DATA/netbatt.log"
+LOG1="$DATA/netbatt.log.1"
+
+log_size() {
+  [ -f "$1" ] || { echo 0; return 0; }
+  n=$($BB stat -c %s "$1" 2>/dev/null)
+  [ -z "$n" ] && n=$($BB wc -c < "$1" 2>/dev/null)
+  echo "${n:-0}"
+}
+
+# 滚动必须在写之前做：一次写只多几十字节，超一点无所谓，不能让它无界增长。
+# 这里直接 printf，不走 log()，否则递归。
+log_rotate() {
+  [ "$(log_size "$LOG")" -ge "${LOG_MAX:-3145728}" ] || return 0
+  mv -f "$LOG" "$LOG1" 2>/dev/null
+  : > "$LOG" 2>/dev/null
+  printf '%s [log] 超过 %s 字节，已滚动到 %s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "${LOG_MAX:-3145728}" "${LOG1##*/}" >> "$LOG" 2>/dev/null
+}
+
+log() {
+  log_rotate
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG" 2>/dev/null
+}
+
+# 只在取值变化时记一行。loop.sh 每 5 秒跑一次 apply，无条件写会把 3MB 刷满，
+# 而且真正有用的信息（状态跳变）反而被淹没。
+log_chg() {
+  k="$DATA/logv.$1"; v="$2"; shift 2
+  [ "$($BB cat "$k" 2>/dev/null)" = "$v" ] && return 0
+  printf '%s\n' "$v" > "$k" 2>/dev/null
+  log "$*"
+}
+
+# 最近 n 行；当前文件不够时把滚动出去的那份接在前面
+log_tail() {
+  n="$1"
+  case "$n" in ''|*[!0-9]*) n=120;; esac
+  [ "$n" -lt 1 ] && n=1
+  [ "$n" -gt 2000 ] && n=2000
+  cur=$($BB wc -l < "$LOG" 2>/dev/null); [ -z "$cur" ] && cur=0
+  if [ "$cur" -ge "$n" ] || [ ! -f "$LOG1" ]; then
+    $BB tail -n "$n" "$LOG" 2>/dev/null
+  else
+    { $BB tail -n "$n" "$LOG1"; $BB tail -n "$n" "$LOG"; } 2>/dev/null | $BB tail -n "$n"
+  fi
+}
+
+# 整份导出：先旧后新，顺序才对
+log_dump() {
+  [ -f "$LOG1" ] && $BB cat "$LOG1" 2>/dev/null
+  $BB cat "$LOG" 2>/dev/null
+}
+
+log_clear() {
+  : > "$LOG" 2>/dev/null
+  rm -f "$LOG1" "$DATA"/logv.* 2>/dev/null
+  log "日志已清空"
+}
+
+# 开机记一次环境快照：排障时第一眼看的就是这几行
+log_boot() {
+  ver=$($BB sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
+  rel=$($BB getprop ro.build.version.release 2>/dev/null)
+  plat=$(chg_platform 2>/dev/null)
+  log "===== 启动 v${ver:-?} · Android $rel · 平台 ${plat:-?} ====="
+  log "配置: 网段 $GW/24 池 .$POOL_START-.$POOL_END · USB类型 $USB_NET(生效 $(usb_net_pick)) · native=$USB_NATIVE · 日志上限 $LOG_MAX"
+  log "USB functions: $(usb_funcs)"
+  chg_detect >/dev/null 2>&1
+  log "USB 接口: $(usb_ifaces 2>/dev/null || echo 无) · 充电通道: ${CHG_CH:-?} ${CHG_NODE:-}"
+}
 
 # ---------- 网络 ----------
 
@@ -98,6 +208,9 @@ downstream() {
 }
 
 stop_dnsmasq() {
+  if [ -f "$DATA/dnsmasq.pid" ]; then
+    log "dnsmasq 停止 (pid $($BB cat "$DATA/dnsmasq.pid" 2>/dev/null))"
+  fi
   [ -f "$DATA/dnsmasq.pid" ] && kill "$(cat $DATA/dnsmasq.pid)" 2>/dev/null
   pkill -f "/system/bin/dnsmasq" 2>/dev/null
   # 清掉早期实验残留在 nat 表里的重定向/DNAT 规则
@@ -121,7 +234,9 @@ sync_dnsmasq() {
   stop_dnsmasq
   sleep 1
 
-  # 永久租约：热点开时会抢走 67 端口，此时没法续租，只能让客户端一次拿到就不再续
+  # 租期给 24h，不用 infinite：Windows 吃得下 0xffffffff，但车机和精简
+  # DHCP 客户端里有把它判成非法租期、干脆不回 ACK 的情况。热点一直开超过
+  # 24 小时时客户端会在 T1 续租失败、到期掉线，重插一次即可。
   # 池不能只给一个地址：实测 dnsmasq 2.51 在 -F 192.168.8.2,192.168.8.2 时
   # 收到 DISCOVER 会直接回 "no address available"，Windows 一直停在 169.254；
   # 扩到 .2-.10 后同一客户端立刻拿到地址。
@@ -132,7 +247,7 @@ sync_dnsmasq() {
   # --log-dhcp：把四步交互写进 logd，ACK 判定靠它（文件日志有缓冲延迟，不可实时读）
   set -- -k -R -n -K -x "$DATA/dnsmasq.pid" -u dns_tether \
          -L "$DATA/dnsmasq.leases" --log-dhcp \
-         -F "$PREFIX.$POOL_START,$PREFIX.$POOL_END,infinite" \
+         -F "$PREFIX.$POOL_START,$PREFIX.$POOL_END,24h" \
          -O "3,$GW" -O "6,$DNS1,$DNS2" \
          --dhcp-option-force=43,ANDROID_METERED \
          -S "$DNS1" -S "$DNS2"
@@ -144,9 +259,16 @@ sync_dnsmasq() {
   nohup /system/bin/dnsmasq "$@" > "$DATA/dnsmasq.log" 2>&1 &
   sleep 1
   echo "$want" > "$DATA/dnsmasq.ifaces"
+  log "dnsmasq 启动: 接口 $want · 池 $PREFIX.$POOL_START-$POOL_END · 网关 $GW"
+  if ! dhcp_serving; then
+    # 2.51 参数写错会直接退出，原因只在 dnsmasq.log 里，顺手抄进运行日志
+    log "dnsmasq 未监听 67: $($BB head -3 "$DATA/dnsmasq.log" 2>/dev/null | $BB tr '\n' ' ')"
+  fi
 }
 
 apply() {
+  # 先对齐 USB 网络功能类型，再配地址：类型切换会重建 gadget，地址得在后面配
+  usb_sync_func
   A=$(ip -o -4 addr show)
   echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
 
@@ -223,6 +345,8 @@ apply() {
 
   [ -n "$DS" ] && echo "$DS" > "$DATA/ifaces"
   echo "$GW" > "$DATA/gw"
+  log_chg ifaces "$DS" "网络: 下游接口 ${DS:-无}"
+  log_chg gw "$GW/$POOL_START-$POOL_END" "网络: 网段 $GW/24 池 .$POOL_START-.$POOL_END · USB 接管 ${USBDS:-无}"
 
   # 热点网段与 USB 网段互访：热点客户端要能直接访问 USB 那台设备的端口
   HSIP=$(ip -o -4 addr show dev "$(ap_iface)" 2>/dev/null | $BB awk '{sub(/\/.*/,"",$4); print $4; exit}')
@@ -248,10 +372,15 @@ apply() {
   if [ "$(ap_running)" = 1 ]; then
     stop_dnsmasq
   elif sys_dhcp_any "$USBDS"; then
+    # 系统 tethering 已接管：这是「有服务」而不是「端口被占所以判断失败」，记下来
+    log_chg dhcpw "sys" "DHCP: 由系统 tethering 负责（模块让位）"
     stop_dnsmasq
   else
+    log_chg dhcpw "self" "DHCP: 模块自建 dnsmasq 服务 ${USBDS:-无}"
     sync_dnsmasq "$USBDS"
   fi
+  ns=$(usb_net_state)
+  log_chg usbnet "$ns" "USB 链路: $ns"
   usb_dhcp_tick
 }
 
@@ -319,6 +448,7 @@ fwd_add() {
   cur=$(fwd_list)
   case " $cur " in *" $p "*) return 0;; esac
   echo "$cur $p" | $BB sed 's/^ *//' > "$DATA/fwd.list"
+  log "端口转发: 添加 $p -> $(usb_peer)"
   sync_fwd
 }
 
@@ -327,6 +457,7 @@ fwd_del() {
   cur=$(fwd_list); new=""
   for x in $cur; do [ "$x" = "$p" ] || new="$new $x"; done
   echo $new > "$DATA/fwd.list"
+  log "端口转发: 移除 $p"
   sync_fwd
 }
 
@@ -445,6 +576,7 @@ chg_apply() {
 
   [ "$(cat "$CHG_NODE" 2>/dev/null)" = "$v" ] && return 0
   printf '%s\n' "$v" > "$CHG_NODE" 2>/dev/null
+  log "充电: 写入 $CHG_NODE=$v（$CHG_CH ${1}）"
 }
 
 chg_once() {
@@ -471,8 +603,13 @@ chg_once() {
     [ -z "$want" ] && want=on
   fi
 
+  prev=$($BB cat "$DATA/chg.state" 2>/dev/null)
   chg_apply "$want"
   echo "$want" > "$DATA/chg.state"
+  # 只在结论变化时记一行：每 5 秒一轮，无条件记会把日志刷满
+  if [ "$prev" != "$want" ]; then
+    log "充电控制: ${prev:-?} -> $want（${cap}% ${t}℃ 上限 $PAUSE_CAP 恢复 $RESUME_CAP）"
+  fi
 }
 
 chg_ctl() {
@@ -481,12 +618,14 @@ chg_ctl() {
       rm -f "$DATA/chg.off"
       touch "$DATA/chg.on"
       chg_once
+      log "充电控制: 启动"
       ;;
     stop)
       rm -f "$DATA/chg.on"
       touch "$DATA/chg.off"
       chg_apply restore
       echo on > "$DATA/chg.state"
+      log "充电控制: 停止并还原硬件"
       ;;
     restart)
       rm -f "$DATA/chg.on" "$DATA/chg.off"
@@ -494,6 +633,7 @@ chg_ctl() {
       sleep 1
       touch "$DATA/chg.on"
       chg_once
+      log "充电控制: 重启"
       ;;
     *) return 1 ;;
   esac
@@ -584,32 +724,166 @@ sys_dhcp_any() {
 hs() {
   t=0
   [ "$1" = usb ] && t=1
+  log_chg "hs$t" "$2" "hs: 请求 $1 on=$2"
   # 开热点前先把我们的 DHCP 让出来，否则系统 DHCP 绑不上 67，热点直接起不来
   if [ "$t" = 0 ] && [ "$2" != "0" ]; then stop_dnsmasq; sleep 1; fi
-  am broadcast -n com.netbatt.console/.TetherReceiver --ei type $t --ez on "$2" >/dev/null 2>&1
+
   if [ "$t" = 1 ]; then
-    sleep 1
     if [ "$2" = "0" ]; then
-      # 系统从没真正 tether 过 USB，只能自己把复合配置切回去，网卡才会消失
       touch "$DATA/usb.off"
-      setprop sys.usb.config mtp,adb
-    else
-      rm -f "$DATA/usb.off"
-      setprop sys.usb.config ncm,adb
+      # native 模式下系统开过 tethering，得让它先收回去
+      am broadcast -n com.netbatt.console/.TetherReceiver --ei type 1 --ez on 0 >/dev/null 2>&1
+      # 复合配置切回纯数据，网卡才会消失；adb 保留，别把自己关在门外
+      if usb_has_func adb; then setprop sys.usb.config mtp,adb; else setprop sys.usb.config mtp; fi
+      log "hs: USB 共享关闭 config=$(getprop sys.usb.config)"
+      return 0
     fi
+    rm -f "$DATA/usb.off"
+    # 一律先走系统 tethering。实测 vivo 这类 ROM 直接写 sys.usb.config 只会建出
+    # functions/rndis.gs4 目录，不会把它链接进 configs/b.1，内核因此不建网卡：
+    # getprop 回显 rndis,adb，但 ip link 里什么都没有，对端自然什么都看不到。
+    # 系统 tethering 走厂商 HAL，会真正重建配置，网卡才出得来。
+    am broadcast -n com.netbatt.console/.TetherReceiver --ei type 1 --ez on 1 >/dev/null 2>&1
+    if wait_for 12 usb_iface_any; then
+      echo native > "$DATA/usb.mode"
+      log "hs: 系统 tethering 建成 接口=$(usb_ifaces) config=$(getprop sys.usb.config)"
+      apply
+      return 0
+    fi
+    if [ "$USB_NATIVE" = 1 ]; then
+      echo "" > "$DATA/usb.mode"
+      log "hs: 系统 tethering 未建出接口，配置为仅原生，不做自建回退"
+      return 0
+    fi
+    # 系统那边不干活才退回自建：直接写 function，只对接受 sys.usb.config 的 ROM 有效
+    log "hs: 系统 tethering 未建出接口，回退自建 function"
+    usb_apply_funcs "$(usb_net_pick)"
+    wait_for 10 usb_iface_any
+    echo manual > "$DATA/usb.mode"
+    apply
+    log "hs: 自建共享 config=$(getprop sys.usb.config) 已链接=$(usb_func_linked) 接口=$(usb_ifaces)"
+    return 0
   fi
+
+  am broadcast -n com.netbatt.console/.TetherReceiver --ei type 0 --ez on "$2" >/dev/null 2>&1
 }
 
 # 用户手动关过 USB 共享后，保活不要再自动拉起
 usb_off_flag() { [ -f "$DATA/usb.off" ] && echo 1 || echo 0; }
 
+# ---------- USB 网络功能 ----------
+# 对端看不到网卡＝手机这端给的 USB 网络 class 对端不认，跟 DHCP 一点关系都没有。
+# gadget 支持哪种网络 function，取决于对端内核装了哪个驱动：
+#   rndis  最广，Android/Windows/Linux 都认，随身 WiFi 基本都是这一类
+#   ncm    需要 cdc_ncm，Windows 10+ 自带，车机和老 Linux 常常没有
+#   ecm    对端表现为 cdc_ether(eth*)，但本机 gadget 得真有这个 function
+usb_gadget_dir() {
+  for d in /config/usb_gadget/*; do
+    [ -d "$d/functions" ] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+
+# 本机真实存在的 function，去掉 .instance 后缀
+usb_funcs() {
+  g=$(usb_gadget_dir) || return 1
+  ls "$g/functions" 2>/dev/null | $BB sed 's/\..*//' | $BB sort -u | $BB tr '\n' ' '
+}
+
+usb_has_func() {
+  case " $(usb_funcs) " in *" $1 "*) return 0;; esac
+  # adb 在 configfs 里的实例名是 ffs.adb，去掉后缀后成了 ffs
+  if [ "$1" = adb ]; then
+    case " $(usb_funcs) " in *" ffs "*) return 0;; esac
+  fi
+  return 1
+}
+
+# 实际要用的网络 function：显式指定就照办，auto 按对端兼容性排序
+usb_net_pick() {
+  case "$USB_NET" in
+    rndis|ncm|ecm) echo "$USB_NET"; return 0 ;;
+  esac
+  for f in rndis ecm ncm; do
+    usb_has_func "$f" && { echo "$f"; return 0; }
+  done
+  echo rndis
+}
+
+# function 是否真的被链接进 configuration。只看"目录存在"不够：
+# vivo 这类 ROM 会建出 functions/rndis.gs4 却不链进 configs/b.1，
+# 于是 getprop 回显 rndis,adb、对端却什么都看不到。
+usb_func_linked() {
+  g=$(usb_gadget_dir) || { echo 0; return 1; }
+  fn=$(usb_net_pick)
+  for l in "$g"/configs/*/f*; do
+    [ -L "$l" ] || continue
+    case "$(readlink "$l" 2>/dev/null)" in
+      *"/functions/$fn".*) echo 1; return 0 ;;
+    esac
+  done
+  echo 0
+}
+
+# 切换 USB 功能组合。adb 必须一起保留，否则切完就丢了调试通道。
+usb_apply_funcs() {
+  fn="$1"; [ -n "$fn" ] || fn=$(usb_net_pick)
+  # 配置里存的类型换机后可能不存在，回退到本机真有的
+  f=$(usb_funcs)
+  if [ -n "$f" ] && ! usb_has_func "$fn"; then
+    for x in rndis ecm ncm; do
+      usb_has_func "$x" && { fn="$x"; break; }
+    done
+  fi
+  # 已经是这个配置就不要重建，白白断一次 adb
+  case "$(getprop sys.usb.config)" in
+    *"$fn"*) return 0 ;;
+  esac
+
+  want="$fn"
+  usb_has_func adb && want="$fn,adb"
+  log "USB 功能切换: $(getprop sys.usb.config) -> $want"
+  # svc usb setFunctions 走 UsbDeviceManager，配置描述符重建最完整。
+  # 但它未必存在（老 ROM 的 svc 没有这个子命令，且可能返回 0），
+  # 所以以 sys.usb.config 里真的出现目标 function 为准，否则退回直接写属性。
+  svc usb setFunctions "$want" >/dev/null 2>&1
+  i=0
+  while [ $i -lt 10 ]; do
+    case "$(getprop sys.usb.config)" in
+      *"$fn"*) log "USB 功能生效: $(getprop sys.usb.config)"; return 0 ;;
+    esac
+    $BB sleep 0.2 2>/dev/null || sleep 1
+    i=$((i + 1))
+  done
+  setprop sys.usb.config "$want"
+  log "USB 功能切换回退 setprop: $(getprop sys.usb.config)"
+}
+
+usb_iface_any() { [ -n "$(usb_ifaces)" ]; }
+
+# 升级后对齐：旧配置可能还是 ncm，而模块现在默认 rndis。
+# 只在「当前已经是某种网络配置」时纠正类型，不会把没开共享的 mtp,adb 擅自切成网卡。
+usb_sync_func() {
+  [ "$USB_NATIVE" = 1 ] && return 0
+  [ "$(usb_off_flag)" = 0 ] || return 0
+  [ "$(usb_online)" = 1 ] || return 0
+  fn=$(usb_net_pick)
+  cur=$(getprop sys.usb.config)
+  case "$cur" in
+    *"$fn"*) return 0 ;;
+    *rndis*|*ncm*|*ecm*) log "启动对齐: 当前 $cur 与配置 $fn 不符"; usb_apply_funcs "$fn" ;;
+  esac
+}
+
 usb_online() {
   [ "$(cat /sys/class/power_supply/usb/online 2>/dev/null)" = "1" ] && echo 1 || echo 0
 }
 
-# USB 共享是否真的在链路上：复合配置里必须有 ncm，否则电脑看不到网卡
+# USB 共享是否真的在链路上：复合配置里得有网络 function，否则对端看不到网卡
 usb_up() {
-  case "$(getprop sys.usb.config)" in *ncm*) echo 1; return 0;; esac
+  case "$(getprop sys.usb.config)$(getprop sys.usb.state)" in
+    *rndis*|*ncm*|*ecm*) echo 1; return 0 ;;
+  esac
   echo 0
 }
 
@@ -819,6 +1093,7 @@ dhcp_recover() {
   rm -rf "$DHCP_LOCK"
   echo idle > "$DHCP_STATE"
   echo "recovered:$st" > "$DHCP_LAST"
+  log "崩溃恢复: 停在 $st，已清锁并还原（热点原状态 ${orig:-?}）"
 }
 
 # 同一个 USB 连接周期只允许一次接管：反复插拔才会重新进入，避免来回关热点
@@ -832,10 +1107,12 @@ usb_dhcp_fail() {
   if [ "$(usb_online)" != 1 ]; then
     echo idle > "$DHCP_STATE"
     dhcp_unlock
+    log "DHCP: USB 已拔出，放弃本次接管（$1）"
     return 0
   fi
   echo "fail:$1" > "$DHCP_LAST"
   echo cooldown > "$DHCP_STATE"
+  log "DHCP 接管失败: $1（接口 $(usb_ifaces) 系统DHCP $(sys_dhcp_any "$(usb_ifaces)" && echo 在 || echo 无)）"
   # 回滚：先让出 67，再把热点还原成本来的样子
   wait_for 6 port67_free
   [ "$($BB cat "$DHCP_APORIG" 2>/dev/null)" = 1 ] && hs wifi 1
@@ -874,6 +1151,7 @@ usb_dhcp_tick() {
   # 记录介入前热点是否真的在开，原来关着就不擅自打开
   ap_orig=$(ap_running)
   echo "$ap_orig" > "$DHCP_APORIG"
+  log "DHCP 接管开始: 接口 $ifs · 热点此前 ap_orig=$ap_orig · 系统DHCP 无"
 
   # 1) 让系统释放 67
   echo hotspot_stopping > "$DHCP_STATE"
@@ -893,10 +1171,11 @@ usb_dhcp_tick() {
   # 3) 以 DHCPACK 为成功依据；邻居解析只作辅助验证
   echo wait_client > "$DHCP_STATE"
   if wait_for 25 dhcp_acked; then
-    :
+    log "DHCP: 收到 ACK，对端地址 $(usb_peer)"
   elif usb_neigh_ok; then
     # 邻居已解析但没抓到 ACK：地址确实下发过，如实记一笔，不推翻结果
     echo ack_missing > "$DHCP_LAST"
+    log "DHCP: 未抓到 ACK，但邻居已解析 $(usb_peer)，按已下发处理"
   else
     usb_dhcp_fail "no_client_ip"
     return 1
@@ -919,6 +1198,7 @@ usb_dhcp_tick() {
   nets=$(usb_net_state)
   echo "$nets" > "$DHCP_NET"
   [ "$nets" = ok ] || echo "verify:$nets" > "$DHCP_LAST"
+  log "DHCP 接管完成: 落地校验 $nets · 热点 ap=$(ap_running) · 对端 $(usb_peer)"
 
   echo idle > "$DHCP_STATE"
   date +%s > "$DHCP_STAMP"
@@ -930,20 +1210,115 @@ usb_dhcp_tick() {
 keepalive() {
   [ "$KEEP_WIFI" = 1 ] && [ "$(ap_running)" = 0 ] && hs wifi 1
   if [ "$KEEP_USB" = 1 ] && [ "$(usb_online)" = 1 ] && [ "$(usb_off_flag)" = 0 ]; then
-    # 系统插拔后会回落成 mtp,adb，网卡就没了，这里补回 ncm
+    # native 模式由系统自己维持，模块插手重建 gadget 只会打断它的 tethering
+    [ "$USB_NATIVE" = 1 ] && return 0
+    fn=$(usb_net_pick)
+    # 系统插拔后会回落成 mtp,adb，网卡就没了，这里按选定类型补回来
     case "$(getprop sys.usb.config)" in
-      *ncm*) ;;
-      *) hs usb 1; sleep 1; setprop sys.usb.config ncm,adb ;;
+      *"$fn"*) ;;
+      *) hs usb 1 ;;
     esac
   fi
 }
 
 set_keep() {
   case "$1" in
-    wifi) cfg_set KEEP_WIFI "$2"; KEEP_WIFI="$2"; echo 0 ;;
-    usb)  cfg_set KEEP_USB "$2";  KEEP_USB="$2";  echo 0 ;;
+    wifi) cfg_set KEEP_WIFI "$2"; KEEP_WIFI="$2"; log "保活: 热点 ${2}"; echo 0 ;;
+    usb)  cfg_set KEEP_USB "$2";  KEEP_USB="$2";  log "保活: USB 共享 ${2}"; echo 0 ;;
     *) echo 1 ;;
   esac
+}
+
+# ---------- 无线 ADB ----------
+# 老做法是把 persist.adb.tcp.port=5555 写进 persist 分区，代价是 vivo 的
+# 开发者选项一读到这条属性就直接拒绝进入，而且禁用 Magisk 模块也不会把它清掉。
+# 这里只用运行时属性 service.adb.tcp.port（重启即失效），"永久"由模块开机恢复，
+# 系统属性层面不留痕，开发者选项随时能进。
+adb_listening() {
+  p=$(getprop service.adb.tcp.port); [ -z "$p" ] && p=$ADB_PORT
+  ss -ltn 2>/dev/null | $BB grep -q ":$p "
+}
+
+adb_closed() { adb_listening && return 1; return 0; }
+
+adbd_running() { [ "$(getprop init.svc.adbd)" = "running" ]; }
+
+# 0=关闭 1=监听中 2=配置了但没监听（adbd 没起来或被 ROM 顶掉）
+adb_tcp_code() {
+  p=$(getprop service.adb.tcp.port)
+  [ -z "$p" ] && { echo 0; return; }
+  ss -ltn 2>/dev/null | $BB grep -q ":$p " && echo 1 || echo 2
+}
+
+adb_tcp_on() {
+  p="$1"; [ -z "$p" ] && p=$ADB_PORT
+  case "$p" in ''|*[!0-9]*) return 1;; esac
+  [ "$p" -ge 1024 ] && [ "$p" -le 65535 ] || return 1
+  setprop service.adb.tcp.port "$p"
+  # ctl.restart 是 init 的属性服务控制，比 stop/start 少一次状态竞争；
+  # 个别 ROM 不认这个触发器，退回 stop/start
+  setprop ctl.restart adbd 2>/dev/null
+  if ! wait_for 4 adb_listening; then
+    stop adbd 2>/dev/null
+    start adbd 2>/dev/null
+    wait_for 5 adb_listening
+  fi
+  cfg_set ADB_TCP 1
+  cfg_set ADB_PORT "$p"
+  ADB_TCP=1; ADB_PORT="$p"
+  log "无线 ADB: 开启 tcp:$p · 监听 $(adb_tcp_code)（1=正常 2=已配置未监听）"
+  return 0
+}
+
+adb_tcp_off() {
+  # resetprop 能把属性真正删掉；setprop 空值在个别 ROM 上会被忽略
+  if [ -x /data/adb/magisk/resetprop ]; then
+    /data/adb/magisk/resetprop --delete service.adb.tcp.port 2>/dev/null
+  elif command -v resetprop >/dev/null 2>&1; then
+    resetprop --delete service.adb.tcp.port 2>/dev/null
+  else
+    setprop service.adb.tcp.port ""
+  fi
+  setprop ctl.restart adbd 2>/dev/null
+  if ! wait_for 4 adb_closed; then
+    stop adbd 2>/dev/null
+    start adbd 2>/dev/null
+    wait_for 5 adb_closed
+  fi
+  cfg_set ADB_TCP 0
+  ADB_TCP=0
+  log "无线 ADB: 已关闭，service.adb.tcp.port 清空"
+  return 0
+}
+
+# 老模块（adb_tcp_5555）把 5555 写进了 persist 分区，禁用模块不会清掉它，
+# 开发者在选项页读到非空就直接拒绝进入。属性文件和内存属性都要清，
+# 只删内存的话重启会从 /data/property 里读回来。
+adb_persist_clear() {
+  had=$(getprop persist.adb.tcp.port 2>/dev/null)
+  rm -f /data/property/persist.adb.tcp.port 2>/dev/null
+  if [ -x /data/adb/magisk/resetprop ]; then
+    /data/adb/magisk/resetprop --delete persist.adb.tcp.port 2>/dev/null
+  else
+    setprop persist.adb.tcp.port "" 2>/dev/null
+  fi
+  if [ -z "$(getprop persist.adb.tcp.port)" ]; then
+    log "persist 残留清理: ${had:-无残留} -> 已清空"
+    return 0
+  fi
+  log "persist 残留清理失败: 仍为 $(getprop persist.adb.tcp.port)"
+  return 1
+}
+
+# 开机恢复：等 adbd 真起来再改端口，太早设会被 init 覆盖
+adb_tcp_restore() {
+  [ "$ADB_TCP" = 1 ] || return 0
+  wait_for 40 adbd_running
+  if adb_tcp_on "$ADB_PORT" >/dev/null 2>&1; then
+    log "无线 ADB: 开机恢复端口 $ADB_PORT 成功"
+  else
+    log "无线 ADB: 开机恢复端口 $ADB_PORT 失败（adbd=$(getprop init.svc.adbd)）"
+  fi
 }
 
 # 控制台地址：热点开着时用热点接口的真实 IP。
@@ -955,6 +1330,12 @@ web_url() {
     ip4=$(ip -o -4 addr show dev "$a" 2>/dev/null | $BB awk '{print $4}' | $BB cut -d/ -f1)
     [ -n "$ip4" ] && { echo "http://$ip4:$PORT"; return; }
   fi
+  # 没开热点时，系统 tethering 给 USB 接口的地址才是对端能访问的地址
+  # （网段由系统选，不再是固定的 8 段，写死 GW 会给出一个打不开的链接）
+  for i in $(usb_ifaces 2>/dev/null); do
+    ip4=$(ip -o -4 addr show dev "$i" 2>/dev/null | $BB awk '{print $4}' | $BB cut -d/ -f1)
+    [ -n "$ip4" ] && { echo "http://$ip4:$PORT"; return; }
+  done
   echo "http://$GW:$PORT"
 }
 
@@ -986,10 +1367,13 @@ status_json() {
 "ifaces":[$ij],"clients":$cj,"count":$cnt,"fwd":$fj,"target":"$tg",
 "batt":$(batt_json),"ap":$(ap_running),
 "usb":$(usb_up),"usb_online":$(usb_online),"keep_wifi":$KEEP_WIFI,"keep_usb":$KEEP_USB,
+"usb_func":"$(usb_net_pick)","usb_net_cfg":"$USB_NET","usb_native":$USB_NATIVE,"usb_linked":$(usb_func_linked),"usb_mode":"$( [ -n "$(usb_ifaces 2>/dev/null)" ] && $BB cat "$DATA/usb.mode" 2>/dev/null | $BB tr -d '\n' )",
+"adb_tcp":$(adb_tcp_code),"adb_port":"$(getprop service.adb.tcp.port)","adb_persist":"$(getprop persist.adb.tcp.port)",
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
 "usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",
 "sys_dhcp":$(sys_dhcp_any && echo 1 || echo 0),
+"log_size":$(log_size "$LOG"),"log_old":$(log_size "$LOG1"),"log_max":${LOG_MAX:-3145728},
 "web":"$(web_url)","dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
 EOF
 }
@@ -1002,6 +1386,11 @@ start_web() {
   $BB setsid $BB httpd -f -p "$PORT" -h "$MODDIR/webroot" > "$DATA/httpd.log" 2>&1 &
   sleep 1
   pgrep -f "httpd -f -p $PORT" > "$DATA/httpd.pid"
+  if [ -s "$DATA/httpd.pid" ]; then
+    log "控制台: 监听 $PORT，地址 $(web_url)"
+  else
+    log "控制台: 启动失败，httpd 日志 $($BB head -3 "$DATA/httpd.log" 2>/dev/null | $BB tr '\n' ' ')"
+  fi
 }
 
 stop_web() {
@@ -1024,6 +1413,7 @@ set_net() {
   fi
   rm -f "$DATA/dnsmasq.leases"
   stop_dnsmasq
+  log "网段修改: $OLDGW -> $GW，池 .$POOL_START-.$POOL_END"
   apply
   return 0
 }
@@ -1048,6 +1438,7 @@ set_batt() {
   cfg_set RESUME_CAP "$r"
   PAUSE_CAP=$p
   RESUME_CAP=$r
+  log "充电阈值: 上限 $p% 恢复 $r%"
   chg_once
   return 0
 }

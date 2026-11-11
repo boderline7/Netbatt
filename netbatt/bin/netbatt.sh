@@ -3,7 +3,7 @@ MODDIR=${0%/*}
 . "$MODDIR/nb-lib.sh"
 
 case "$1" in
-  init)   chg_init; dhcp_recover ;;
+  init)   log_boot; chg_init; dhcp_recover ;;
   apply)  apply ;;
   chg)    chg_once ;;
   keep)   keepalive ;;

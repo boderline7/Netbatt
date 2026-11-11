@@ -51,10 +51,11 @@ ADB_PORT=5555
 # 太早设会被 init 覆盖，面板会显示"已配置，未监听"
 ADB_BOOT=1
 # USB 端拿不到地址时，是否允许模块临时关掉热点、抢 67 端口把地址发下去。
-# 默认 0（关）：实测这条路径会让热点起不来、热点回来之后客户端拿到错网段的地址，
-# 代价远大于收益——系统 tethering 正常时根本用不到它。
-# 确实需要对端拿地址时，在 config.sh 把它设成 1，代价是接管期间热点会断一次。
-USB_DHCP_TAKEOVER=0
+# 默认 1（开）：vivo 这类 ROM 的系统 tethering DHCP 不稳定，USB 对端常常拿不到地址
+# （日志里 no_peer 卡死、热点 ap0 也没 DHCP）。接管会在对端没地址时临时关热点发一次
+# 地址再还原，代价是接管瞬间热点断一下。
+# 系统 tethering 一直稳定、对端总能拿到地址的机型，可设回 0 关掉。
+USB_DHCP_TAKEOVER=1
 # 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
 LOG_MAX=3145728
 # 周期采样间隔（秒）。loop 每 5 秒一轮，太密会刷满日志，默认 15 秒记一行电量/功率
@@ -102,7 +103,7 @@ EOC
 fi
 
 # 升级上来的老配置缺新键时补默认值；已有的键一律不动
-for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728" "SAMPLE_INT=15"; do
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=1" "LOG_MAX=3145728" "SAMPLE_INT=15"; do
   $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
 done
 
@@ -129,6 +130,12 @@ fi
 if ! $BB grep -q '^CFG_SAMPLE_SEED=' "$CFG" 2>/dev/null; then
   [ "$SAMPLE_INT" = "30" ] && $BB sed -i 's/^SAMPLE_INT=.*/SAMPLE_INT=15/' "$CFG" 2>/dev/null
   echo "CFG_SAMPLE_SEED=1" >> "$CFG"
+fi
+# v3.1.6 把 USB DHCP 接管默认从关改开。老配置里的 USB_DHCP_TAKEOVER=0 是上一版默认值
+# 灌进去的，不是用户主动关的；升级时纠正一次，用户之后自己改的照旧。
+if ! $BB grep -q '^CFG_DHCP_SEED=' "$CFG" 2>/dev/null; then
+  [ "$USB_DHCP_TAKEOVER" = "0" ] && $BB sed -i 's/^USB_DHCP_TAKEOVER=.*/USB_DHCP_TAKEOVER=1/' "$CFG" 2>/dev/null
+  echo "CFG_DHCP_SEED=1" >> "$CFG"
 fi
 . "$CFG"
 
@@ -475,6 +482,8 @@ apply() {
   fi
   ns=$(usb_net_state)
   log_chg usbnet "$ns" "USB 链路: $ns"
+  # 车机拿不到地址时，把 67 端口/系统 dnsmasq/USB 网卡状态原样记下来，定位「谁没在发」
+  dhcp_diag
   usb_dhcp_tick
 }
 
@@ -923,6 +932,28 @@ sys_dhcp_on() {
 ap_dhcp_on() {
   a=$(ap_iface) || return 1
   ss -lunp 2>/dev/null | $BB grep -F "$a" | $BB grep -qE ':67\b.*(system_server|dnsmasq)'
+}
+
+# 诊断：67 端口到底谁在监听。车机拿不到 IP 时，先分清「系统没在服务」还是「服务了但没发出去」。
+# 只记录一次快照（用 log_chg + 独立 key，状态变了才刷日志，不会每 5 秒刷屏）。
+dhcp_diag() {
+  local snap key
+  # 关键原始证据：udp 67 的监听者 + 系统 dnsmasq 进程 + 当前 USB 复合配置
+  snap=$(ss -lunp 2>/dev/null | $BB grep -E ':67\b' | $BB sed 's/^ *//;s/  */ /g' | $BB head -5)
+  key=$(echo "$snap" | $BB md5sum 2>/dev/null | $BB cut -c1-8)
+  [ -z "$key" ] && key=$(echo "$snap" | $BB cksum 2>/dev/null | $BB awk '{print $1}')
+  [ -z "$key" ] && key="na"
+  log_chg d67 "$key" "诊断 67监听: $(echo "$snap" | $BB tr '\n' '|' | $BB head -c 300)"
+  # 系统 tethering 的 dnsmasq 进程是否活着（pid + 命令行）
+  local dp
+  dp=$(ps -A 2>/dev/null | $BB grep -E 'dnsmasq' | $BB grep -v grep | $BB sed 's/^ *//' | $BB head -3 | $BB tr '\n' '|')
+  log_chg ddp "$dp" "诊断 系统dnsmasq: ${dp:-无}"
+  # 当前 USB 复合配置 + 网卡 DOWN/UP 状态（DOWN 的网卡地址配了也发不出去）
+  local cfg st
+  cfg=$(getprop sys.usb.config); st=$(getprop sys.usb.state)
+  local links
+  links=$(for i in $(usb_ifaces); do $BB printf '%s=%s ' "$i" "$(ip link show "$i" 2>/dev/null | $BB grep -oE 'state (UP|DOWN)' | $BB awk '{print $2}')"; done)
+  log_chg dusb "$cfg/$st/$links" "诊断 USB: config=$cfg state=$st 链路=$links"
 }
 
 # 给定的接口集合里有没有系统 DHCP 在服务（默认查全部 USB 接口）

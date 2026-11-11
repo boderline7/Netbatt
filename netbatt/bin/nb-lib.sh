@@ -176,6 +176,12 @@ log_clear() {
   log "日志已清空"
 }
 
+# 模块构建号，页面拿它判断自己是不是 WebView 缓存里的旧副本
+nb_build() {
+  v=$($BB sed -n 's/^versionCode=//p' "$MODDIR/module.prop" 2>/dev/null | $BB tr -d '\r\n ')
+  echo "${v:-0}"
+}
+
 # 开机记一次环境快照：排障时第一眼看的就是这几行
 log_boot() {
   ver=$($BB sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
@@ -1348,6 +1354,7 @@ status_json() {
       wlan0)               role=up ;;
       wlan2|softap*|ap*)   role=hotspot ;;
       rndis*|ncm*|usb*)    role=usb ;;
+      ccmni*|rmnet*|wwan*|pdp*) role=mobile ;;
       *)                   role=other ;;
     esac
     ij="$ij{\"dev\":\"$i\",\"role\":\"$role\",\"ip\":\"$ip4\"},"
@@ -1363,7 +1370,7 @@ status_json() {
   tg=$(usb_peer)
 
   cat <<EOF
-{"prefix":"$PREFIX","gw":"$GW","pool_start":$POOL_START,"pool_end":$POOL_END,
+{"prefix":"$PREFIX","gw":"$GW","pool_start":$POOL_START,"pool_end":$POOL_END,"build":$(nb_build),
 "ifaces":[$ij],"clients":$cj,"count":$cnt,"fwd":$fj,"target":"$tg",
 "batt":$(batt_json),"ap":$(ap_running),
 "usb":$(usb_up),"usb_online":$(usb_online),"keep_wifi":$KEEP_WIFI,"keep_usb":$KEEP_USB,

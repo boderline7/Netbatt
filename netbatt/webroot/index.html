@@ -15,63 +15,107 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:15px/1.5 -apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
-  padding:16px 14px 40px;max-width:640px;margin:0 auto}
-h1{font-size:18px;margin:0}
-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-.badge{font-size:12px;padding:4px 10px;border-radius:20px;background:#1d2a22;color:var(--acc);border:1px solid #24402f}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
-.card h2{font-size:13px;color:var(--dim);font-weight:600;letter-spacing:.06em;margin:0 0 12px;text-transform:uppercase}
-.row{display:flex;gap:10px;align-items:center}
-label{font-size:13px;color:var(--dim);display:block;margin-bottom:5px}
+  padding:14px 12px 36px;max-width:640px;margin:0 auto}
+h1{font-size:17px;margin:0}
+header{position:relative;display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.hdr{display:flex;align-items:center}
+.hdr > * + *{margin-left:8px}
+.badge{font-size:12.5px;padding:5px 11px;border-radius:20px;background:#1d2a22;color:var(--acc);
+  border:1px solid #24402f;font-family:inherit;font-weight:500}
+.badge::after{content:" ⌄";color:#4f7a63}
+.iconbtn{padding:5px 10px;font-size:14px;line-height:1.25;border-radius:18px;background:#1b222b;
+  border:1px solid var(--line);color:var(--dim)}
+.iconbtn:active{color:var(--fg)}
+/* 网络地址：点徽标从右上角展开，不再单占一张卡 */
+.pop{position:absolute;right:0;top:calc(100% + 8px);z-index:8;min-width:236px;
+  background:#1b2129;border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+  box-shadow:0 12px 32px #000a}
+.pop[hidden]{display:none}
+.pop .prow{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;
+  border-bottom:1px dashed #202832}
+.pop .prow:last-of-type{border:0}
+.pop .prow span{color:var(--dim)}
+.pop .prow b{font-family:ui-monospace,Consolas,monospace;font-weight:600}
+.pop .pfoot{font-size:12px;color:var(--dim);margin-top:6px;padding-top:7px;border-top:1px solid #202832;
+  word-break:break-all}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.card h2{font-size:12.5px;color:var(--dim);font-weight:600;letter-spacing:.06em;margin:0;
+  text-transform:uppercase}
+.row{display:flex;align-items:center}
+.row > * + *{margin-left:10px}
 input[type=text]{width:100%;background:#0e1216;border:1px solid var(--line);color:var(--fg);
-  border-radius:9px;padding:10px 12px;font-size:15px;font-family:ui-monospace,Consolas,monospace}
+  border-radius:9px;padding:9px 12px;font-size:15px;font-family:ui-monospace,Consolas,monospace}
 input[type=text]:focus{outline:none;border-color:var(--blue)}
 button{background:#222b36;color:var(--fg);border:1px solid var(--line);border-radius:9px;
-  padding:10px 14px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit}
+  padding:9px 13px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit}
 button:active{transform:scale(.97)}
 button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
 button.ghost{background:transparent}
 button.danger{color:var(--bad)}
 button.on{background:#14301f;border-color:var(--acc);color:var(--acc)}
 button.active{background:var(--acc);border-color:var(--acc);color:#0b1a12;font-weight:600}
-button.keep{background:#1b222b;border:1px solid var(--line);color:var(--dim)}
-button.keep.on{background:#14301f;border-color:var(--acc);color:var(--acc)}
 button:disabled{opacity:.4;cursor:default}
 button:disabled:active{transform:none}
-.grid3{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:10px}
-.stat{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed #1e252e;font-size:14px}
-.stat:last-child{border:0}
-.stat span:first-child{color:var(--dim)}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;padding:6px 4px;border-bottom:1px solid var(--line)}
-td{padding:9px 4px;border-bottom:1px solid #1b2129;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+/* 两张开关卡并排：内容压到最短，细节交给下面的链路条 */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.grid2 > .card{margin:0}
+.mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.tag{font-size:12px;padding:3px 9px;border-radius:20px;background:#1b222b;border:1px solid var(--line);
+  color:var(--dim);font-weight:500}
+.tag.on{background:#14301f;border-color:var(--acc);color:var(--acc)}
+.big{font-size:19px;font-weight:600;margin-bottom:10px}
+.btns2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.btns2 button{padding:8px 6px;font-size:13.5px}
+.btns3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.btns3 button{padding:8px 4px;font-size:13px}
+.sub{font-size:12.5px;color:var(--dim);margin-top:6px;word-break:break-all}
+.sub b{color:var(--fg);font-family:ui-monospace,Consolas,monospace;font-weight:600}
+.warnrow{display:flex;align-items:center;justify-content:space-between;
+  font-size:12px;color:var(--warn);margin-top:8px;padding:6px 9px;border-radius:8px;
+  background:#2a2114;border:1px solid #4a3a15}
+.chips{display:flex;flex-wrap:wrap;margin-bottom:-7px}
+.chip{font-size:12.5px;color:var(--dim);background:#0e1216;border:1px solid var(--line);
+  border-radius:8px;padding:5px 10px;white-space:nowrap;margin:0 7px 7px 0}
+.chip b{color:var(--fg);font-weight:600;margin-left:2px}
+.q4{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.q4 button{padding:8px 4px;font-size:13px}
+.kv{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;
+  border-bottom:1px dashed #1e252e}
+.kv:last-of-type{border:0}
+.kv span{color:var(--dim)}
+.kv b{font-family:ui-monospace,Consolas,monospace;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--dim);font-weight:500;font-size:11.5px;padding:6px 3px;border-bottom:1px solid var(--line)}
+td{padding:8px 3px;border-bottom:1px solid #1b2129;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
 td.name{font-family:inherit}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--acc);margin-right:6px}
-.empty{color:var(--dim);font-size:13.5px;padding:14px 0;text-align:center}
-.batt{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
-.batt b{font-size:40px;font-weight:700;letter-spacing:-1px}
-.batt small{color:var(--dim);font-size:14px}
-.slider{position:relative;height:36px;display:flex;align-items:center}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--acc);margin-right:5px}
+.empty{color:var(--dim);font-size:13px;padding:12px 0;text-align:center}
+.batt{display:flex;align-items:baseline;margin-bottom:8px}
+.batt b{font-size:38px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums}
+/* 间距用 margin 给死：部分 WebView 对 flex 的 gap 支持不全，用 gap 会贴在一起 */
+.batt .unit{color:var(--dim);font-size:15px;margin-left:14px;flex:0 0 auto}
+.batt #bstat{margin-left:auto;color:var(--dim);font-size:13.5px;white-space:nowrap;padding-left:10px}
+.slabel{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--dim);margin-top:8px}
+.slabel b{font-size:14.5px;color:var(--fg);font-family:ui-monospace,Consolas,monospace}
+.slider{position:relative;height:34px;display:flex;align-items:center}
 /* 轨道左右各内缩滑块半径，使填充末端与滑块中心始终对齐 */
 .slider .track{position:absolute;left:12px;right:12px;height:8px;border-radius:4px;background:#2a323c}
 .slider .fill{height:100%;border-radius:4px;width:50%;background:var(--acc)}
 .slider.blue .fill{background:var(--blue)}
-.slider input[type=range]{position:relative;z-index:1;width:100%;height:36px;margin:0;
+.slider input[type=range]{position:relative;z-index:1;width:100%;height:34px;margin:0;
   -webkit-appearance:none;background:transparent}
-.slider input[type=range]::-webkit-slider-runnable-track{height:36px;background:transparent}
-.slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:24px;
+.slider input[type=range]::-webkit-slider-runnable-track{height:34px;background:transparent}
+.slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;
   border-radius:50%;background:#fff;border:4px solid var(--acc);margin-top:6px;
   box-shadow:0 1px 6px #0006}
 .slider.blue input[type=range]::-webkit-slider-thumb{border-color:var(--blue)}
 .slider input[type=range]:disabled::-webkit-slider-thumb{background:#8b98a8;border-color:#4a5563;box-shadow:none}
 .slider.locked .fill{opacity:.45}
-.slabel{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--dim);margin-top:10px}
-.slabel b{font-size:15px;color:var(--fg);font-family:ui-monospace,Consolas,monospace}
 .hint{font-size:12.5px;color:var(--dim);margin-top:8px}
-.logbox{background:#0b0e12;border:1px solid var(--line);border-radius:9px;padding:10px 11px;margin:0 0 12px;
+.hint .dot{margin-right:5px}
+.logbox{background:#0b0e12;border:1px solid var(--line);border-radius:9px;padding:10px 11px;margin:0 0 10px;
   font:12px/1.55 ui-monospace,Consolas,"Noto Sans Mono",monospace;color:#c8d3df;
-  max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;-webkit-overflow-scrolling:touch}
-.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px}
+  max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;-webkit-overflow-scrolling:touch}
 #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
   background:#2b3440;color:#fff;padding:10px 18px;border-radius:22px;font-size:13.5px;
   opacity:0;transition:.25s;pointer-events:none;z-index:9;box-shadow:0 8px 24px #000a}
@@ -81,122 +125,133 @@ td.name{font-family:inherit}
 <body>
 <header>
   <h1>NetBatt 控制台</h1>
-  <div class="badge" id="badge">--</div>
+  <div class="hdr">
+    <button class="badge" id="badge">--</button>
+    <button class="iconbtn" id="hardReload">刷新</button>
+  </div>
+  <div class="pop" id="addrPop" hidden>
+    <div id="ifaces"><div class="prow"><span>加载中</span></div></div>
+    <div class="pfoot">控制台 <span id="web">--</span></div>
+  </div>
 </header>
 
-<div class="card">
-  <h2>热点</h2>
-  <div class="stat"><span>状态</span><span id="apState">--</span></div>
-  <div class="btns" style="grid-template-columns:1fr 1fr">
-    <button id="apOn">开启热点</button>
-    <button id="apOff">关闭热点</button>
+<div class="grid2">
+  <section class="card">
+    <div class="mh">
+      <h2>热点</h2>
+      <button class="tag" id="keepWifi">保活</button>
+    </div>
+    <div class="big" id="apState">--</div>
+    <div class="btns2">
+      <button id="apOn">开启</button>
+      <button id="apOff">关闭</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="mh">
+      <h2>USB 网桥</h2>
+      <button class="tag" id="keepUsb">保活</button>
+    </div>
+    <div class="big" id="usbState">--</div>
+    <div class="btns2">
+      <button id="usbOn">开启</button>
+      <button id="usbOff">关闭</button>
+    </div>
+  </section>
+</div>
+
+<div class="card" style="padding:11px 14px">
+  <div class="chips">
+    <span class="chip">DHCP<b id="dhcpState">--</b></span>
+    <span class="chip">链路<b id="usbNet">--</b></span>
+    <span class="chip">上行<b id="uplinkState">--</b></span>
   </div>
-  <button class="keep" id="keepWifi" style="width:100%;margin-top:9px">永久保活：关</button>
-  <div class="hint" id="apHint">开关由自带特权应用执行；浏览器打开本页同样可以开关。热点端的网段由系统分配，具体 IP 见下方「网络地址」。</div>
 </div>
 
-<div class="card">
-  <h2>USB 共享（网桥）</h2>
-  <div class="stat"><span>状态</span><span id="usbState">--</span></div>
-  <div class="stat"><span>地址分配</span><span id="dhcpState">--</span></div>
-  <div class="stat"><span>USB 链路</span><span id="usbNet">--</span></div>
-  <div class="stat"><span>上行网络</span><span id="uplinkState">--</span></div>
-  <div class="btns" style="grid-template-columns:1fr 1fr">
-    <button id="usbOn">开启共享</button>
-    <button id="usbOff">关闭共享</button>
-  </div>
-  <button class="keep" id="keepUsb" style="width:100%;margin-top:9px">永久保活：关</button>
-  <div class="hint">默认交给系统共享（TetheringManager），网段由系统决定（实测 192.168.16.x），地址分配与 NAT 也由系统负责，兼容性最好；对端拿不到地址时才回退到模块自建，此时固定 192.168.8 段。热点那边的设备可以直接访问对端设备的端口。热点开着时插新设备，模块会短暂让出 DHCP 端口把地址发下去再恢复；每次 USB 接入只接管一次，成功以 DHCP ACK 为准。USB 链路与上行网络分开显示：单 Wi-Fi 通道机型开热点时上行会断，那是正常现象，不代表 USB 侧失败。</div>
-</div>
+<div class="grid2">
+  <section class="card">
+    <div class="mh"><h2>USB 类型</h2></div>
+    <div class="q4">
+      <button data-net="auto">自动</button>
+      <button data-net="rndis">RNDIS</button>
+      <button data-net="ncm">NCM</button>
+      <button data-net="ecm">ECM</button>
+    </div>
+    <div class="sub" id="usbFunc">--</div>
+  </section>
 
-<div class="card">
-  <h2>USB 网络类型</h2>
-  <div class="stat"><span>当前生效</span><span id="usbFunc">--</span></div>
-  <div class="btns" style="grid-template-columns:repeat(4,1fr)">
-    <button data-net="auto">自动</button>
-    <button data-net="rndis">RNDIS</button>
-    <button data-net="ncm">NCM</button>
-    <button data-net="ecm">ECM</button>
-  </div>
-  <div class="hint">对端完全看不到网卡时换这里，跟 DHCP 无关。RNDIS 兼容性最好（随身 WiFi 基本都是它），NCM 要求对端有 cdc_ncm 驱动，ECM 要求本机存在该 function。注意：部分 ROM（vivo 就是）不接受直接改 sys.usb.config，会建出 function 目录却不链接进配置，内核不建网卡，此时这四项切了也没用，必须走系统共享。上方共享方式显示「系统共享」才说明网卡真的建出来了。</div>
-</div>
-
-<div class="card">
-  <h2>无线 ADB</h2>
-  <div class="stat"><span>状态</span><span id="adbState">--</span></div>
-  <div class="stat"><span>监听端口</span><span id="adbPort">--</span></div>
-  <div class="stat" id="adbResidueRow" style="display:none"><span>persist 残留</span><span id="adbResidue" style="color:#e5a00d">--</span></div>
-  <div class="btns" style="grid-template-columns:1fr 1fr">
-    <button id="adbOn">开启</button>
-    <button id="adbOff">关闭</button>
-  </div>
-  <button class="keep" id="adbClear" style="width:100%;margin-top:9px;display:none">清理 persist 残留</button>
-  <div class="hint" id="adbAddr">开启后 adbd 同时监听 TCP，重启自动恢复；不写 persist 属性，开发者选项可以正常进入。</div>
-</div>
-
-<div class="card">
-  <h2>网络地址</h2>
-  <div id="ifaces"><div class="empty">加载中…</div></div>
-</div>
-
-<div class="card">
-  <h2>已连接设备 <span id="cnt" style="color:var(--fg)"></span></h2>
-  <table>
-    <thead><tr><th>IP</th><th>名称</th><th>MAC</th></tr></thead>
-    <tbody id="devs"><tr><td colspan="3" class="empty">暂无设备</td></tr></tbody>
-  </table>
+  <section class="card">
+    <div class="mh">
+      <h2>无线 ADB</h2>
+      <button class="tag" id="adbToggle">开启</button>
+    </div>
+    <div class="big" id="adbState">--</div>
+    <div class="sub" id="adbPort">--</div>
+    <div class="warnrow" id="adbResidueRow" style="display:none">
+      <span id="adbResidue">--</span>
+      <button class="tag" id="adbClear" style="color:var(--warn);border-color:#4a3a15">清理</button>
+    </div>
+  </section>
 </div>
 
 <div class="card">
   <h2>电量 / 充电阈值</h2>
-  <div class="batt"><b id="cap">--</b><small>%</small><small id="bstat" style="margin-left:auto"></small></div>
+  <div class="batt"><b id="cap">--</b><small class="unit">%</small><small id="bstat"></small></div>
 
-  <div class="slabel"><span>充电上限（到这里停止充电）</span><b id="pcapv">88</b></div>
+  <div class="slabel"><span>充电上限</span><b id="pcapv">88</b></div>
   <div class="slider locked" id="pwrap">
     <div class="track"><div class="fill" id="pfill"></div></div>
     <input type="range" id="pcap" min="20" max="100" step="1" value="88" disabled>
   </div>
 
-  <div class="slabel"><span>恢复阈值（低于这里开始充电）</span><b id="rcapv">83</b></div>
+  <div class="slabel"><span>恢复阈值</span><b id="rcapv">83</b></div>
   <div class="slider blue locked" id="rwrap">
     <div class="track"><div class="fill" id="rfill"></div></div>
     <input type="range" id="rcap" min="5" max="99" step="1" value="83" disabled>
   </div>
 
-  <button id="editToggle" style="width:100%;margin-top:14px">编辑阈值</button>
-
-  <div class="btns">
+  <div class="btns3" style="grid-template-columns:1fr 1.1fr 1fr 1fr">
+    <button id="editToggle">编辑</button>
     <button id="chgStart">启动</button>
     <button id="chgRestart">重启</button>
     <button class="danger" id="chgStop">停止</button>
   </div>
-  <div class="hint"><span id="chgdot" class="dot" style="background:#555"></span><span id="chgtxt">控制器状态未知</span>
-    · <span id="temp">--</span>℃</div>
-  <div class="hint" style="margin-top:4px"><span id="powdot" class="dot" style="background:#555"></span><span id="powtxt">--</span></div>
-  <div class="hint" style="margin-top:4px" id="chgch">充电通道：--</div>
-</div>
-
-<div class="card" style="padding:12px 16px">
-  <div class="hint" style="margin:0">服务地址 <span id="web">--</span></div>
+  <div class="hint"><span id="chgdot" class="dot" style="background:#555"></span><span id="chgtxt">控制器状态未知</span> · <span id="temp">--</span>℃</div>
+  <div class="hint" style="margin-top:5px"><span id="powdot" class="dot" style="background:#555"></span><span id="powtxt">--</span></div>
+  <div class="hint" style="margin-top:5px" id="chgch">充电通道：--</div>
 </div>
 
 <div class="card">
-  <h2>端口转发</h2>
-  <div class="row">
-    <input type="text" id="fwdPort" placeholder="端口，例如 18765" inputmode="numeric" style="flex:1">
-    <button class="primary" id="fwdAdd">添加</button>
+  <div class="mh">
+    <h2>设备与端口转发</h2>
+    <button class="tag" id="fwdToggle">转发设置</button>
   </div>
-  <div id="fwdList" style="margin-top:10px"></div>
-  <div class="hint">热点设备访问本机这些端口时，会转发到 USB 共享端那台设备。它的 IP 变了会自动跟上，不用改任何设置。列表为空＝不转发。</div>
-  <div class="hint">当前转发目标：<span id="fwdTarget">--</span>（自动跟随）</div>
+  <div id="fwdPanel" hidden>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="fwdPort" placeholder="端口，例如 18765" inputmode="numeric" style="flex:1">
+      <button class="primary" id="fwdAdd">添加</button>
+    </div>
+    <div id="fwdList"></div>
+    <div class="sub">目标设备 <b id="fwdTarget">--</b>（自动跟随）</div>
+  </div>
+
+  <div style="margin-top:10px">
+    <h2 style="margin-bottom:6px">已连接设备 <span id="cnt" style="color:var(--fg)"></span></h2>
+    <table>
+      <thead><tr><th>IP</th><th>名称</th><th>MAC</th></tr></thead>
+      <tbody id="devs"><tr><td colspan="3" class="empty">暂无设备</td></tr></tbody>
+    </table>
+  </div>
 </div>
 
 <div class="card">
-  <h2>运行日志</h2>
-  <div class="stat"><span>占用</span><span id="logSize">--</span></div>
-  <div class="hint" style="margin:0 0 10px">模块自己记的运行记录，车机上不用 adb 也能看。写满上限后滚成 netbatt.log.1，只保留一份。</div>
+  <div class="mh">
+    <h2>运行日志</h2>
+    <span class="sub" style="margin:0" id="logSize">--</span>
+  </div>
   <pre class="logbox" id="logBox">加载中…</pre>
-  <div class="btns">
+  <div class="btns3">
     <button id="logReload">刷新</button>
     <button id="logDl">下载</button>
     <button class="danger" id="logClear">清空</button>
@@ -208,7 +263,25 @@ td.name{font-family:inherit}
 <script>
 const $ = s => document.querySelector(s);
 
-const ROLE = {up:'上级下发的 IP', hotspot:'热点端的 IP', usb:'USB 共享端的 IP'};
+// 页面构建号：与 module.prop 的 versionCode 保持一致。
+// WebView 会缓存 HTML，模块升级后 APP 里可能还是旧页面；
+// 拿到 status 一看 build 对不上就自动换 URL 拉新的。
+const PAGE_BUILD = __BUILD__;
+
+const ROLE = {up:'上级代理', hotspot:'热点端', usb:'USB 端', mobile:'移动数据', other:'其它接口'};
+
+// 内核报的是英文状态，界面上统一中文
+const BSTAT = {Charging:'充电中', Discharging:'放电中', Full:'已充满',
+  'Not charging':'未充电', Unknown:''};
+
+let ST = {};
+
+// 强制刷新：reload() 在 APP 里可能还是命中旧副本，换 URL 带时间戳才是新资源
+function hardReload(){
+  const b = $('#hardReload');
+  if(b){ b.textContent = '…'; b.disabled = true; }
+  location.replace(location.pathname + '?r=' + Date.now());
+}
 
 function toast(msg){
   const t=$('#toast'); t.textContent=msg; t.classList.add('on');
@@ -223,44 +296,58 @@ async function api(action, extra={}){
 function bridge(){ return (window.NetBatt && window.NetBatt.setHotspot) ? window.NetBatt : null; }
 
 function render(s){
+  ST = s;
+
+  // 缓存里的旧页面：60 秒内只自动跳一次，避免死循环
+  if(s.build && +s.build !== PAGE_BUILD){
+    const last = +sessionStorage.getItem('nb_rl') || 0;
+    if(Date.now() - last > 60000){
+      sessionStorage.setItem('nb_rl', Date.now());
+      location.replace(location.pathname + '?v=' + s.build);
+      return;
+    }
+  }
+
   $('#badge').textContent = s.gw;
+
+  // 接口地址收进右上角那个徽标里，页面不再单占一张卡
+  $('#ifaces').innerHTML = s.ifaces.length
+    ? s.ifaces.map(i=>`<div class="prow"><span>${ROLE[i.role]||'其它接口'}</span><b>${i.ip}</b></div>`).join('')
+    : '<div class="prow"><span>当前没有共享接口</span></div>';
+  $('#web').textContent = s.web;
 
   $('#apState').textContent = s.ap==1 ? '已开启' : '未开启';
   $('#apState').style.color = s.ap==1 ? 'var(--acc)' : 'var(--dim)';
   pair('#apOn','#apOff', s.ap);
 
   if(s.usb==1) $('#usbState').textContent = '已开启';
-  else if(s.usb_online==1) $('#usbState').textContent = '未开启（已插 USB）';
-  else $('#usbState').textContent = '未开启（未插 USB）';
+  else if(s.usb_online==1) $('#usbState').textContent = '已插线';
+  else $('#usbState').textContent = '未开启';
   $('#usbState').style.color = s.usb==1 ? 'var(--acc)' : 'var(--dim)';
+  pair('#usbOn','#usbOff', s.usb);
+
   const DHCP_TXT = {idle:'空闲', hotspot_stopping:'让出热点中', wait_port:'等待 67 释放',
-    dnsmasq_starting:'启动 DHCP 服务', wait_client:'等待 DHCP ACK', dnsmasq_stopping:'撤回 DHCP 服务',
+    dnsmasq_starting:'启动 DHCP 服务', wait_client:'等待 ACK', dnsmasq_stopping:'撤回 DHCP 服务',
     hotspot_restoring:'恢复热点中', verify_restored:'校验链路中', cooldown:'已回滚，冷却中'};
   $('#dhcpState').textContent = DHCP_TXT[s.dhcp] || s.dhcp || '--';
   $('#dhcpState').style.color = (s.dhcp && s.dhcp!=='idle' && s.dhcp!=='cooldown') ? 'var(--acc)'
-    : (s.dhcp==='cooldown' ? '#e5a00d' : 'var(--dim)');
-  if(s.dhcp_last) $('#dhcpState').title = s.dhcp_last;
+    : (s.dhcp==='cooldown' ? '#e5a00d' : '');
 
-  // USB 链路与上行是两件事：单 Wi-Fi 通道机型开热点会让 wlan0 掉线，但 USB 侧照样可用
-  const NET_TXT = {ok:'可用', no_gw:'网关地址已丢', no_peer:'对端未解析',
-    conflict:'与热点网段冲突', down:'无接口', unknown:'未知'};
+  const NET_TXT = {ok:'可用', no_gw:'网关已丢', no_peer:'对端未解析',
+    conflict:'网段冲突', down:'无接口', unknown:'未知'};
   $('#usbNet').textContent = NET_TXT[s.usb_net] || s.usb_net || '--';
   $('#usbNet').style.color = s.usb_net==='ok' ? 'var(--acc)'
-    : (s.usb_net==='conflict'||s.usb_net==='no_gw' ? '#e5484d' : 'var(--dim)');
-  $('#usbNet').title = s.dhcp_last ? ('上次记录：'+s.dhcp_last) : '';
+    : (s.usb_net==='conflict'||s.usb_net==='no_gw' ? 'var(--bad)' : '');
   $('#uplinkState').textContent = s.uplink==='ok' ? '正常' : (s.uplink==='down' ? '不可用' : '未知');
   $('#uplinkState').style.color = s.uplink==='ok' ? 'var(--acc)'
-    : (s.uplink==='down' ? '#e5a00d' : 'var(--dim)');
-  pair('#usbOn','#usbOff', s.usb);
+    : (s.uplink==='down' ? '#e5a00d' : '');
 
-  // USB 网络类型：显示实际生效的 function，高亮的是配置值（auto 就是自动）
+  // USB 类型：显示实际生效的 function，高亮的是配置值（auto 就是自动）
   const NET_NAME = {rndis:'RNDIS', ncm:'NCM', ecm:'ECM'};
   const elFunc = $('#usbFunc');
-  // manual 且 linked=0：属性设了、function 目录也建了，但没链接进 configs，
-  // 内核不会建网卡——vivo 这类 ROM 就是这样，必须走系统共享。
   const linkWarn = (s.usb_mode === 'manual' && s.usb_linked == 0);
   elFunc.textContent = (NET_NAME[s.usb_func] || s.usb_func || '--')
-    + (s.usb_net_cfg==='auto' ? '（自动）' : '')
+    + (s.usb_net_cfg==='auto' ? ' · 自动' : '')
     + (s.usb_mode === 'native' ? ' · 系统共享'
        : s.usb_mode === 'manual' ? ' · 模块自建' : '')
     + (linkWarn ? ' · 未链接' : '');
@@ -273,27 +360,22 @@ function render(s){
   $('#adbState').textContent = ADB_TXT[s.adb_tcp] || '--';
   $('#adbState').style.color = s.adb_tcp==1 ? 'var(--acc)'
     : (s.adb_tcp==2 ? '#e5a00d' : 'var(--dim)');
-  $('#adbPort').textContent = s.adb_port || '--';
-  $('#adbOn').classList.toggle('active', s.adb_tcp==1);
+  $('#adbToggle').textContent = s.adb_tcp==1 ? '关闭' : '开启';
+  $('#adbToggle').classList.toggle('on', s.adb_tcp==1);
 
   // 老模块留下的 persist 属性：不清掉，开发者选项一直进不去
   const resid = s.adb_persist || '';
   $('#adbResidueRow').style.display = resid ? 'flex' : 'none';
-  $('#adbClear').style.display = resid ? 'block' : 'none';
-  $('#adbResidue').textContent = resid ? ('persist.adb.tcp.port=' + resid) : '';
+  $('#adbResidue').textContent = resid ? ('persist=' + resid) : '';
   if(s.adb_tcp==1 && s.adb_port && s.ifaces.length){
     const urls = s.ifaces.map(i=>i.ip.split('/')[0]+':'+s.adb_port);
-    $('#adbAddr').textContent = '连接地址：' + urls.join('    ');
+    $('#adbPort').innerHTML = '连接 <b>' + urls.join('</b> <b>') + '</b>';
   }else{
-    $('#adbAddr').textContent = '开启后 adbd 同时监听 TCP，重启自动恢复；不写 persist 属性，开发者选项可以正常进入。';
+    $('#adbPort').textContent = s.adb_port ? ('端口 ' + s.adb_port) : '端口未监听';
   }
 
   keepBtn('#keepWifi', s.keep_wifi, '热点');
-  keepBtn('#keepUsb', s.keep_usb, 'USB 共享');
-
-  $('#ifaces').innerHTML = s.ifaces.length
-    ? s.ifaces.map(i=>`<div class="stat"><span>${ROLE[i.role]||'其它接口'}</span><span>${i.ip}</span></div>`).join('')
-    : '<div class="empty">当前没有共享接口（热点/USB 未开启）</div>';
+  keepBtn('#keepUsb', s.keep_usb, 'USB');
 
   $('#cnt').textContent = s.count ? `(${s.count})` : '';
   $('#devs').innerHTML = s.count
@@ -302,7 +384,7 @@ function render(s){
 
   const b = s.batt;
   $('#cap').textContent = b.cap;
-  $('#bstat').textContent = b.status;
+  $('#bstat').textContent = BSTAT[b.status] || b.status || '';
   $('#temp').textContent = b.temp;
   paintPower(b, s);
 
@@ -312,14 +394,12 @@ function render(s){
   }
 
   $('#chgdot').style.background = b.enabled ? 'var(--acc)' : '#555';
-  $('#chgtxt').textContent = b.enabled ? '控制器运行中' + (b.state==='off'?'（当前暂停充电）':'（当前充电中）') : '控制器已停止';
+  $('#chgtxt').textContent = b.enabled ? '控制器运行中' + (b.state==='off'?'（暂停充电）':'（充电中）') : '控制器已停止';
   $('#chgStart').classList.toggle('active', !!b.enabled);
   $('#chgStop').classList.toggle('active', !b.enabled);
   $('#chgch').textContent = chgDesc(b);
-  $('#web').textContent = s.web;
   $('#fwdTarget').textContent = s.target || '--';
-  $('#logSize').textContent = bytes(s.log_size) + ' / ' + bytes(s.log_max)
-    + (s.log_old ? '（旧档 ' + bytes(s.log_old) + '）' : '');
+  $('#logSize').textContent = bytes(s.log_size) + ' / ' + bytes(s.log_max);
   renderFwd(s.fwd);
 }
 
@@ -360,16 +440,16 @@ function chgDesc(b){
   return `充电通道：${plat} · 开关型 ${node}=${b.sw}`;
 }
 
-// 端口转发列表：热点设备访问本机这些端口 -> USB 端固定设备
+// 端口转发列表
 function renderFwd(list){
   const box = $('#fwdList');
   list = list || [];
   if(!list.length){
-    box.innerHTML = '<div class="hint" style="margin:0">暂无转发端口</div>';
+    box.innerHTML = '<div class="sub">暂无转发端口</div>';
     return;
   }
   box.innerHTML = list.map(p =>
-    `<div class="stat"><span>${p}</span><button class="ghost" data-p="${p}" style="padding:3px 10px;font-size:12px">移除</button></div>`
+    `<div class="kv"><span>${p}</span><button class="ghost" data-p="${p}" style="padding:2px 9px;font-size:12px">移除</button></div>`
   ).join('');
   box.querySelectorAll('button[data-p]').forEach(b=>{ b.onclick = ()=>fwdOp('del', b.dataset.p); });
 }
@@ -400,7 +480,7 @@ function paintPower(b, s){
   else if(b.dir==='dis'){ txt = `正在放电 · ${Math.abs(a).toFixed(2)} A · ${w.toFixed(1)} W`; col = '#ff8a5c'; }
   else { txt = '待机 · 电流可忽略'; col = '#555'; }
   if(b.usb_max>0 && b.usb_max<=500000 && s.ap==1 && w<1.5)
-    txt += `｜USB 口只给 ${(b.usb_max/1000000).toFixed(1)} A，热点开着可能入不敷出`;
+    txt += `｜USB 口只给 ${(b.usb_max/1000000).toFixed(1)} A`;
   $('#powtxt').textContent = txt;
   $('#powdot').style.background = col;
 }
@@ -410,11 +490,11 @@ function paint(id, vid){
   $(id==='#pcap' ? '#pfill' : '#rfill').style.width = ((v-mn)/(mx-mn)*100)+'%';
 }
 
-// 保活按钮：开=绿色高亮，关=普通
+// 保活按钮：开=高亮
 function keepBtn(sel, on, name){
   const el=$(sel); if(!el) return;
   el._on = on==1 ? 1 : 0;
-  el.textContent = name + '永久保活：' + (el._on ? '开' : '关');
+  el.textContent = name + '保活' + (el._on ? ' 开' : '');
   el.classList.toggle('on', !!el._on);
 }
 
@@ -452,11 +532,28 @@ function setEdit(on){
   $('#pwrap').classList.toggle('locked', !on);
   $('#rwrap').classList.toggle('locked', !on);
   const b = $('#editToggle');
-  b.textContent = on ? '完成并保存' : '编辑阈值';
+  b.textContent = on ? '保存' : '编辑';
   b.classList.toggle('on', on);
   if(!on) pushBatt();
 }
 $('#editToggle').addEventListener('click', ()=>setEdit(!editing));
+
+// 网络地址浮层：点徽标开关，点别处收起
+$('#badge').addEventListener('click', e=>{
+  e.stopPropagation();
+  const p = $('#addrPop');
+  p.hidden = !p.hidden;
+});
+document.addEventListener('click', e=>{
+  const p = $('#addrPop');
+  if(!p.hidden && !e.target.closest('#addrPop')) p.hidden = true;
+});
+
+$('#fwdToggle').addEventListener('click', ()=>{
+  const p = $('#fwdPanel');
+  p.hidden = !p.hidden;
+  $('#fwdToggle').classList.toggle('on', !p.hidden);
+});
 
 $('#fwdAdd').addEventListener('click', ()=>{
   const v = $('#fwdPort').value.trim();
@@ -511,8 +608,8 @@ async function setAdb(on){
     setTimeout(refresh, 1600);
   }catch(e){ toast('操作失败'); }
 }
-$('#adbOn').addEventListener('click', ()=>setAdb(true));
-$('#adbOff').addEventListener('click', ()=>setAdb(false));
+// 一个按钮切换：当前监听中就关，否则开
+$('#adbToggle').addEventListener('click', ()=>setAdb(!(ST.adb_tcp==1)));
 $('#adbClear').addEventListener('click', async ()=>{
   try{
     const r = await api('clearpersist', {});
@@ -528,7 +625,7 @@ async function toggleKeep(key, sel){
     const ex = {}; ex[key]=v;
     const j = await api('keep', ex);
     if(!j.ok) throw new Error();
-    toast((key==='wifi'?'热点':'USB 共享') + '永久保活已' + (v?'开启':'关闭'));
+    toast((key==='wifi'?'热点':'USB 共享') + '保活已' + (v?'开启':'关闭'));
     refresh();
   }catch(e){ toast('设置失败'); }
 }
@@ -548,7 +645,7 @@ $('#logClear').addEventListener('click', async ()=>{
   const b = $('#logClear');
   if(!logArm){
     logArm = 1;
-    b.textContent = '再点一次确认';
+    b.textContent = '再点一次';
     b.classList.add('on');
     setTimeout(()=>{ if(logArm){ logArm = 0; b.textContent = '清空'; b.classList.remove('on'); } }, 4000);
     return;
@@ -560,7 +657,7 @@ $('#logClear').addEventListener('click', async ()=>{
   loadLog();
 });
 
-if(bridge()){ $('#apHint').textContent = '当前在 APP 内，直接调用特权接口开关热点。'; }
+$('#hardReload').addEventListener('click', hardReload);
 paint('#pcap','#pcapv');
 paint('#rcap','#rcapv');
 refresh();

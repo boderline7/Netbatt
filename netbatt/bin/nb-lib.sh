@@ -50,6 +50,11 @@ ADB_PORT=5555
 # 开机是否自动恢复无线 ADB。开机后等 adbd 起来再延迟几秒设置，
 # 太早设会被 init 覆盖，面板会显示"已配置，未监听"
 ADB_BOOT=1
+# USB 端拿不到地址时，是否允许模块临时关掉热点、抢 67 端口把地址发下去。
+# 默认 0（关）：实测这条路径会让热点起不来、热点回来之后客户端拿到错网段的地址，
+# 代价远大于收益——系统 tethering 正常时根本用不到它。
+# 确实需要对端拿地址时，在 config.sh 把它设成 1，代价是接管期间热点会断一次。
+USB_DHCP_TAKEOVER=0
 # 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
 LOG_MAX=3145728
 
@@ -78,6 +83,7 @@ USB_NATIVE=$USB_NATIVE
 ADB_TCP=$ADB_TCP
 ADB_PORT=$ADB_PORT
 ADB_BOOT=$ADB_BOOT
+USB_DHCP_TAKEOVER=$USB_DHCP_TAKEOVER
 LOG_MAX=$LOG_MAX
 EOC
 fi
@@ -93,7 +99,7 @@ EOC
 fi
 
 # 升级上来的老配置缺新键时补默认值；已有的键一律不动
-for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "LOG_MAX=3145728"; do
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728"; do
   $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
 done
 
@@ -397,7 +403,10 @@ apply() {
 # ---------- 端口转发 ----------
 # 热点设备访问本机这些端口时，转给 USB 端那台固定设备；列表为空＝不转发
 
-# USB 端那台设备的实际地址：优先 DHCP 租约，其次 ARP 邻居，都没有才兜底 .2
+# USB 端那台设备的实际地址：优先 ARP 邻居，其次 ip neigh，再次 DHCP 租约。
+# 兜底的 $PREFIX.2 只在本机确实持有 $GW（说明地址是模块自己发的）时才成立：
+# 系统 tethering 会把对端放到它自己选的网段，这时候写 8.2 等于指向一个不存在的主机，
+# 端口转发的 DNAT 目标就成了黑洞。
 usb_peer() {
   p=""
   # 邻居表是实时状态，优先；租约文件在 infinite 租约下不一定及时落盘，只能当次选
@@ -405,10 +414,41 @@ usb_peer() {
     [ -n "$p" ] && break
     p=$($BB awk -v d="$i" '$6==d && $3 ~ /0x[23]/ && $1 !~ /^169\.254/ {print $1; exit}' /proc/net/arp 2>/dev/null)
   done
+  for i in $(usb_ifaces); do
+    [ -n "$p" ] && break
+    p=$(ip neigh show dev "$i" 2>/dev/null | $BB awk '$1 ~ /\./ && $1 !~ /^169\.254/ {print $1; exit}')
+  done
   [ -z "$p" ] && [ -f "$DATA/dnsmasq.leases" ] && \
     p=$($BB awk '$3 ~ /^[0-9]+\./ && $3 !~ /^169\.254/ {print $3; exit}' "$DATA/dnsmasq.leases")
-  [ -z "$p" ] && p="$PREFIX.2"
+  if [ -z "$p" ]; then
+    for i in $(usb_ifaces); do
+      ip -o -4 addr show dev "$i" 2>/dev/null | $BB grep -q " $GW/" && { p="$PREFIX.2"; break; }
+    done
+  fi
   echo "$p"
+}
+
+# 接口上第一个 IPv4 的 /24（Android 的 tethering 网段都是 /24）
+iface_net24() {
+  [ -n "$1" ] || return 1
+  n=$(ip -o -4 addr show dev "$1" 2>/dev/null | $BB awk '$4 !~ /^127\./ {print $4; exit}')
+  [ -n "$n" ] || return 1
+  echo "$n" | $BB awk -F'[./]' '{print $1"."$2"."$3".0/24"}'
+}
+
+# 对端真实网段。系统 tethering 接管后不是 8 段（实测 16/66/83/103/152 段都出现过），
+# 按模块自己的 PREFIX 放行 FORWARD 会漏掉真正在跑的那个网段。
+usb_peer_net() {
+  for i in $(usb_ifaces); do
+    n=$(iface_net24 "$i") && { echo "$n"; return 0; }
+  done
+  return 1
+}
+
+# 热点网段：按热点接口上的真实地址算，不用模块的 PREFIX
+ap_net() {
+  a=$(ap_iface) || return 1
+  iface_net24 "$a"
 }
 
 fwd_list() {
@@ -419,11 +459,35 @@ fwd_list() {
 sync_fwd() {
   ports=$(fwd_list)
   tg=$(usb_peer)
-  # 用独立链；端口列表和目标地址都没变就不重建，否则计数器每 5 秒被清零
+  pnet=$(usb_peer_net)
+  hnet=$(ap_net)
   iptables -t nat -N NETBATT_FWD 2>/dev/null
   iptables -t nat -N NETBATT_SNAT 2>/dev/null
-  # 热点接口进来的流量先过这个链；列表为空时链是空的，等于不转发
-  for i in wlan2 ap0 softap0 swlan0; do
+
+  # 转发能不能成，前提不在 nat 表，而在另外三处。老版本只动了 nat，
+  # 于是在系统 tethering 换过网段之后出现了「规则都在、就是不通」：
+  #   1) ip_forward 关着 -> 包根本不过路由
+  #   2) 对端网段没有 lookup main 的策略路由 -> 改了目的地址的包找不到出口
+  #   3) netd 的 FORWARD 默认 DROP，而这里只放行了模块自己的 8 段
+  echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
+  nets=""
+  for n in "$hnet" "$pnet" "$PREFIX.0/24"; do
+    [ -n "$n" ] || continue
+    case " $nets " in *" $n "*) ;; *) nets="$nets $n" ;; esac
+    ip rule show | $BB grep -q "to $n lookup main" || \
+      ip rule add to "$n" lookup main pref 3500 2>/dev/null
+  done
+  for a in $nets; do
+    for b in $nets; do
+      [ "$a" = "$b" ] && continue
+      iptables -C FORWARD -s "$a" -d "$b" -j ACCEPT 2>/dev/null || \
+        iptables -I FORWARD -s "$a" -d "$b" -j ACCEPT 2>/dev/null
+    done
+  done
+
+  # 热点接口进来的流量先过这个链。接口名按实测取：写死列表会漏掉 wlan1 和
+  # 厂商自定义名，那时候规则一条不少、就是没有包进来匹配。
+  for i in $(ap_iface) $AP_IFACES; do
     ip link show "$i" >/dev/null 2>&1 || continue
     iptables -t nat -C PREROUTING -i "$i" -j NETBATT_FWD 2>/dev/null || \
       iptables -t nat -I PREROUTING -i "$i" -j NETBATT_FWD 2>/dev/null
@@ -439,17 +503,31 @@ sync_fwd() {
 
   iptables -t nat -F NETBATT_FWD 2>/dev/null
   iptables -t nat -F NETBATT_SNAT 2>/dev/null
-  # SNAT 出接口不能写死 ncm0：vivo 的 USB 网卡叫 rndis0，写死会让回程包不回热点侧
-  for p in $ports; do
-    iptables -t nat -A NETBATT_FWD -p tcp --dport "$p" -j DNAT --to-destination "$tg:$p" 2>/dev/null
-    iptables -t nat -A NETBATT_FWD -p udp --dport "$p" -j DNAT --to-destination "$tg:$p" 2>/dev/null
-    for i in $(usb_ifaces); do
-      iptables -t nat -A NETBATT_SNAT -o "$i" -p tcp --dport "$p" -j MASQUERADE 2>/dev/null
-      iptables -t nat -A NETBATT_SNAT -o "$i" -p udp --dport "$p" -j MASQUERADE 2>/dev/null
-    done
+  # 回程包：对端不一定有回热点网段的路由，源地址统一换成本机 USB 侧地址，
+  # 由 conntrack 反向还原，比按端口写 SNAT 稳（端口只是目的，回程对不上号）
+  for i in $(usb_ifaces); do
+    [ -n "$hnet" ] && iptables -t nat -A NETBATT_SNAT -o "$i" -s "$hnet" -j MASQUERADE 2>/dev/null
+    [ -n "$pnet" ] && iptables -t nat -A NETBATT_SNAT -o "$i" -s "$pnet" -j MASQUERADE 2>/dev/null
   done
+  # 没有目标地址就别下 DNAT：指向空地址的规则会让「已开启」变成一句空话
+  if [ -n "$tg" ]; then
+    for p in $ports; do
+      iptables -t nat -A NETBATT_FWD -p tcp --dport "$p" -j DNAT --to-destination "$tg:$p" 2>/dev/null
+      iptables -t nat -A NETBATT_FWD -p udp --dport "$p" -j DNAT --to-destination "$tg:$p" 2>/dev/null
+    done
+  fi
   echo "$tg" > "$DATA/fwd.target"
 }
+
+# 转发到底有没有在跑：页面用它给一句话结论，免得只看到「已开启」却不通
+fwd_state() {
+  [ -n "$(fwd_list)" ] || { echo off; return 0; }
+  [ -n "$(usb_ifaces)" ] || { echo no_usb; return 0; }
+  [ -n "$(usb_peer)" ] || { echo no_peer; return 0; }
+  n=$(iptables -t nat -S NETBATT_FWD 2>/dev/null | $BB grep -c -- '--dport')
+  [ "${n:-0}" -gt 0 ] && echo on || echo no_rule
+}
+
 
 fwd_add() {
   p="$1"
@@ -1146,6 +1224,13 @@ usb_dhcp_tick() {
   [ "$(usb_online)" = 1 ] || return 0
   [ "$(usb_off_flag)" = 0 ] || return 0
   ifs=$(usb_ifaces); [ -z "$ifs" ] && return 0
+  # 接管要先把热点关掉才能拿到 67，代价太大，默认不做。
+  # 实测这正是「开了无线 ADB 之后热点起不来」的来源：adbd 重启会让 USB 重新枚举，
+  # 触发一轮接管，热点被关掉之后系统那边的 tethering 状态还没回来，页面就一直是未开启。
+  if [ "$USB_DHCP_TAKEOVER" != 1 ]; then
+    log_chg dhcpw "off" "DHCP: 接管已关闭（不关热点），USB 地址交给系统"
+    return 0
+  fi
   # 热点没开时不存在 67 竞争，apply 里常规的 sync_dnsmasq 就够了；
   # 这里只处理「热点开着 + USB 对端拿不到地址」这一种情况
   [ "$(ap_running)" = 1 ] || return 0
@@ -1378,6 +1463,21 @@ web_url() {
   echo ""
 }
 
+# 两个真正拿得出手的地址：接 USB 的对端用哪个、连热点的设备用哪个。
+# 127.0.0.1 是手机自己，写出来对用户没有任何意义，页面不再显示。
+web_url_ap() {
+  a=$(ap_iface) || return 0
+  ip4=$(ip -o -4 addr show dev "$a" 2>/dev/null | $BB awk '$4 !~ /^127\./ {print $4; exit}' | $BB cut -d/ -f1)
+  [ -n "$ip4" ] && echo "http://$ip4:$PORT"
+}
+
+web_url_usb() {
+  for i in $(usb_ifaces 2>/dev/null); do
+    ip4=$(ip -o -4 addr show dev "$i" 2>/dev/null | $BB awk '$4 !~ /^127\./ {print $4; exit}' | $BB cut -d/ -f1)
+    [ -n "$ip4" ] && { echo "http://$ip4:$PORT"; return 0; }
+  done
+}
+
 status_json() {
   ij=""
   # 列出全部 IPv4 接口（排除 lo）：USB 端固定 192.168.8.x，热点端用系统网段（10.x 等）
@@ -1408,13 +1508,16 @@ status_json() {
 "batt":$(batt_json),"ap":$(ap_running),
 "usb":$(usb_up),"usb_online":$(usb_online),"keep_wifi":$KEEP_WIFI,"keep_usb":$KEEP_USB,
 "usb_func":"$(usb_net_pick)","usb_net_cfg":"$USB_NET","usb_native":$USB_NATIVE,"usb_linked":$(usb_func_linked),"usb_mode":"$( [ -n "$(usb_ifaces 2>/dev/null)" ] && $BB cat "$DATA/usb.mode" 2>/dev/null | $BB tr -d '\n' )",
+"usb_types":"$(usb_funcs)","usb_peer":"$(usb_peer)","usb_peer_net":"$(usb_peer_net)",
+"fwd_state":"$(fwd_state)","fwd_rules":"$(iptables -t nat -S NETBATT_FWD 2>/dev/null | $BB grep -c -- '--dport')",
+"web_usb":"$(web_url_usb)","web_ap":"$(web_url_ap)",
 "adb_tcp":$(adb_tcp_code),"adb_port":"$(getprop service.adb.tcp.port)","adb_boot":$ADB_BOOT,"adb_persist":"$(getprop persist.adb.tcp.port)",
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
 "usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",
 "sys_dhcp":$(sys_dhcp_any && echo 1 || echo 0),
 "log_size":$(log_size "$LOG"),"log_old":$(log_size "$LOG1"),"log_max":${LOG_MAX:-3145728},
-"web":"$(web_url)","dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
+"dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
 EOF
 }
 

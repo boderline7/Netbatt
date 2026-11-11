@@ -188,13 +188,22 @@ apply() {
     done
   fi
 
-  # USB 共享端由模块接管地址；热点端（wlan2）用系统自己的网段，不碰
+  # USB 共享端由模块接管地址；热点端用系统自己的网段，不碰
   USBDS=""
   for i in $DS; do
     case "$i" in
       rndis*|ncm*|usb[0-9]*)
         # 用户手动关了共享就不再接管地址
         if [ "$(usb_off_flag)" = 1 ]; then continue; fi
+        # 系统 tethering 已经接管这个接口时，地址与 DHCP 都归系统管。
+        # 实测 vivo 开 ncm,adb 后 system_server 立刻在 rndis0 上跑自己的 DHCP
+        # （网段 192.168.66.x），模块若同时把接口改成 192.168.8.1，
+        # 对端拿到 66.x 却连不上 8.1，等于把能用的链路改坏。
+        if sys_dhcp_on "$i"; then
+          ip link set "$i" up 2>/dev/null
+          USBDS="$USBDS $i"
+          continue
+        fi
         for a in $(echo "$A" | $BB awk -v d="$i" -v g="$GW/24" '
             $2==d && $4!=g && $4 !~ /^169\.254\./ {print $4}'); do
           ip addr del "$a" dev "$i" 2>/dev/null
@@ -231,8 +240,18 @@ apply() {
   # 热点设备访问本机指定端口的流量，按页面里的列表转给 USB 端那台固定设备
   sync_fwd
 
-  # 系统热点会用 67 端口起自己的 DHCP，抢了它热点就起不来，只能二选一
-  if [ "$(ap_running)" = 1 ]; then stop_dnsmasq; else sync_dnsmasq "$USBDS"; fi
+  # 三种情况下模块不启 dnsmasq：
+  # 1) 热点开着 —— 系统热点自己绑 67，抢了就起不来
+  # 2) 系统 tethering 正在服务 USB 接口 —— 它已经给了地址，我们再去抢只会
+  #    每轮 bind 失败刷错误日志（实测 vivo：system_server 占 0.0.0.0%rndis0:67）
+  # 3) 没有下游接口
+  if [ "$(ap_running)" = 1 ]; then
+    stop_dnsmasq
+  elif sys_dhcp_any "$USBDS"; then
+    stop_dnsmasq
+  else
+    sync_dnsmasq "$USBDS"
+  fi
   usb_dhcp_tick
 }
 
@@ -546,6 +565,21 @@ ap_running() {
   ip -o -4 addr show dev "$a" 2>/dev/null | $BB grep -q 'inet ' && echo 1 || echo 0
 }
 
+# 系统 tethering 是否已在某个接口上提供 DHCP：绑定形式为 0.0.0.0%<iface>:67，
+# 持有者是 system_server。命中说明系统自己把这条链路服务得很好，模块必须让位。
+sys_dhcp_on() {
+  [ -n "$1" ] || return 1
+  ss -lunp 2>/dev/null | $BB grep -F "0.0.0.0%$1:67" | $BB grep -q 'system_server'
+}
+
+# 给定的接口集合里有没有系统 DHCP 在服务（默认查全部 USB 接口）
+sys_dhcp_any() {
+  for i in ${1:-$(usb_ifaces)}; do
+    sys_dhcp_on "$i" && return 0
+  done
+  return 1
+}
+
 # 让特权应用去开/关共享：hs <wifi|usb> <0|1>
 hs() {
   t=0
@@ -657,9 +691,11 @@ dhcp_acked() {
 # 这里必须读 ip neigh 的 NUD 状态；/proc/net/arp 的 Flags 只有 0x0/0x2，
 # 没有 REACHABLE/STALE 之类的状态位，拿它当「已解析」是错的。
 usb_neigh_ok() {
+  # 默认只认本网段；系统 tethering 接管时对端在它自己的网段（实测 66 段），传 * 表示不限
+  pat="${1:-$PREFIX.}"
   for i in $(usb_ifaces); do
-    ip neigh show dev "$i" 2>/dev/null | $BB awk -v p="$PREFIX." '
-      index($1,p)==1 && $1 !~ /^169\.254/ && ($0 ~ /REACHABLE|STALE|DELAY|PROBE|PERMANENT/) {ok=1}
+    ip neigh show dev "$i" 2>/dev/null | $BB awk -v p="$pat" '
+      (p=="*" || index($1,p)==1) && $1 !~ /^169\.254/ && ($0 ~ /REACHABLE|STALE|DELAY|PROBE|PERMANENT/) {ok=1}
       END{exit !ok}' && return 0
   done
   return 1
@@ -716,6 +752,14 @@ dhcp_cooling() {
 #   c) 客户端是否还能解析到（infinite 租约不等于服务端重新接管后仍认可这个地址）
 usb_net_state() {
   ifs=$(usb_ifaces); [ -z "$ifs" ] && { echo down; return 0; }
+
+  # 系统 tethering 服务这条链路时，网关地址不是我们的 $GW（实测是 192.168.66.x），
+  # 只要对端拿到了地址就算通，不要因为「不是 8 段」判成 no_gw
+  if sys_dhcp_any "$ifs"; then
+    usb_neigh_ok '*' && { echo ok; return 0; }
+    echo no_peer
+    return 0
+  fi
 
   gwok=0
   for i in $ifs; do
@@ -818,6 +862,8 @@ usb_dhcp_tick() {
   # 热点没开时不存在 67 竞争，apply 里常规的 sync_dnsmasq 就够了；
   # 这里只处理「热点开着 + USB 对端拿不到地址」这一种情况
   [ "$(ap_running)" = 1 ] || return 0
+  # 系统 tethering 已经在服务这条链路，地址由它负责，接管既无必要也抢不到端口
+  sys_dhcp_any "$ifs" && return 0
   usb_client_ok && return 0
   # 本周期已经试过：后续触发只更新状态，不再重复开关热点
   [ -f "$DHCP_CYCLE" ] && return 0
@@ -943,6 +989,7 @@ status_json() {
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
 "usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",
+"sys_dhcp":$(sys_dhcp_any && echo 1 || echo 0),
 "web":"$(web_url)","dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
 EOF
 }

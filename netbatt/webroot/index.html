@@ -134,7 +134,6 @@ td.name{font-family:inherit}
 <body>
 <header>
   <h1>NetBatt 控制台</h1>
-  <button class="iconbtn" id="hardReload">刷新</button>
 </header>
 
 <div class="addrbar">
@@ -146,30 +145,38 @@ td.name{font-family:inherit}
     <span class="alab">Wi-Fi 热点 · 设备访问</span>
     <b id="aAp">未开启</b>
   </div>
+  <div class="addr off" id="addrFix" style="grid-column:1/-1">
+    <span class="alab">固定入口 · 热点和 USB 都能用（不变）</span>
+    <b id="aFix">未开启</b>
+  </div>
 </div>
 
 <div class="grid2">
   <section class="card">
-    <div class="mh">
-      <h2>热点</h2>
-      <button class="tag" id="keepWifi">保活</button>
-    </div>
+    <div class="mh"><h2>热点</h2></div>
     <div class="big" id="apState">--</div>
-    <div class="btns2">
+    <div class="sub" id="apHint" style="display:none"></div>
+    <div class="btns2" style="margin-top:10px">
       <button id="apOn">开启</button>
       <button id="apOff">关闭</button>
+    </div>
+    <div class="btns2" style="margin-top:8px">
+      <button class="tag" id="apKeep" style="justify-content:center">保活</button>
+      <button class="tag" id="apBoot" style="justify-content:center">开机自启</button>
     </div>
   </section>
 
   <section class="card">
-    <div class="mh">
-      <h2>USB 网桥</h2>
-      <button class="tag" id="keepUsb">保活</button>
-    </div>
+    <div class="mh"><h2>USB 网桥</h2></div>
     <div class="big" id="usbState">--</div>
-    <div class="btns2">
+    <div class="sub" id="usbHint" style="display:none"></div>
+    <div class="btns2" style="margin-top:10px">
       <button id="usbOn">开启</button>
       <button id="usbOff">关闭</button>
+    </div>
+    <div class="btns2" style="margin-top:8px">
+      <button class="tag" id="usbKeep" style="justify-content:center">保活</button>
+      <button class="tag" id="usbBoot" style="justify-content:center">开机自启</button>
     </div>
   </section>
 </div>
@@ -221,9 +228,14 @@ td.name{font-family:inherit}
     <div class="mh"><h2>无线 ADB</h2></div>
     <div class="big" id="adbState">--</div>
     <div class="sub" id="adbPort">--</div>
+    <div class="sub" id="adbHint" style="display:none"></div>
     <div class="btns2" style="margin-top:10px">
-      <button id="adbToggle">开启</button>
-      <button class="tag" id="adbBoot" style="justify-content:center">自启</button>
+      <button id="adbOn">开启</button>
+      <button id="adbOff">关闭</button>
+    </div>
+    <div class="btns2" style="margin-top:8px">
+      <button class="tag" id="adbKeep" style="justify-content:center">保活</button>
+      <button class="tag" id="adbBoot" style="justify-content:center">开机自启</button>
     </div>
     <div class="warnrow" id="adbResidueRow" style="display:none">
       <span id="adbResidue">--</span>
@@ -233,7 +245,10 @@ td.name{font-family:inherit}
 </div>
 
 <div class="card">
-  <h2>电量 / 充电阈值</h2>
+  <div class="mh">
+    <h2>电量 / 充电阈值</h2>
+    <button class="tag" id="battRefresh">刷新</button>
+  </div>
   <div class="batt"><b id="cap">--</b><small class="unit">%</small><small id="bstat"></small></div>
 
   <div class="slabel"><span>充电上限</span><b id="pcapv">88</b></div>
@@ -262,12 +277,12 @@ td.name{font-family:inherit}
 <div class="card">
   <div class="mh">
     <h2>已连接设备 <span id="cnt" style="color:var(--fg)"></span></h2>
-    <button class="tag" id="fwdToggle" hidden>转发设置</button>
+    <button class="tag" id="fwdToggle">转发设置</button>
   </div>
-  <div class="sub" id="fwdState" hidden style="margin:0 0 2px">--</div>
+  <div class="sub" id="fwdState" style="margin:0 0 2px">--</div>
   <div id="fwdPanel" hidden>
     <div class="row" style="margin:8px 0">
-      <input type="text" id="fwdPort" placeholder="端口，例如 18765" inputmode="numeric" style="flex:1">
+      <input type="text" id="fwdPort" placeholder="端口，例如 9000" inputmode="numeric" style="flex:1">
       <button class="primary" id="fwdAdd">添加</button>
     </div>
     <div id="fwdList"></div>
@@ -283,7 +298,8 @@ td.name{font-family:inherit}
 <div class="card">
   <div class="mh">
     <h2>运行日志</h2>
-    <span class="sub" style="margin:0" id="logSize">--</span>
+    <button class="tag" id="logToggle">记录中</button>
+    <span class="sub" style="margin:0 0 0 8px" id="logSize">--</span>
   </div>
   <pre class="logbox" id="logBox">加载中…</pre>
   <div class="btns3">
@@ -298,23 +314,11 @@ td.name{font-family:inherit}
 <script>
 const $ = s => document.querySelector(s);
 
-// 页面构建号：与 module.prop 的 versionCode 保持一致。
-// WebView 会缓存 HTML，模块升级后 APP 里可能还是旧页面；
-// 拿到 status 一看 build 对不上就自动换 URL 拉新的。
-const PAGE_BUILD = __BUILD__;
-
 // 内核报的是英文状态，界面上统一中文
 const BSTAT = {Charging:'充电中', Discharging:'放电中', Full:'已充满',
   'Not charging':'未充电', Unknown:''};
 
 let ST = {};
-
-// 强制刷新：reload() 在 APP 里可能还是命中旧副本，换 URL 带时间戳才是新资源
-function hardReload(){
-  const b = $('#hardReload');
-  if(b){ b.textContent = '…'; b.disabled = true; }
-  location.replace(location.pathname + '?r=' + Date.now());
-}
 
 function toast(msg){
   const t=$('#toast'); t.textContent=msg; t.classList.add('on');
@@ -344,41 +348,47 @@ function setAddr(sel, txt){
 function render(s){
   ST = s;
 
-  // 缓存里的旧页面：60 秒内只自动跳一次，避免死循环
-  if(s.build && +s.build !== PAGE_BUILD){
-    const last = +sessionStorage.getItem('nb_rl') || 0;
-    if(Date.now() - last > 60000){
-      sessionStorage.setItem('nb_rl', Date.now());
-      location.replace(location.pathname + '?v=' + s.build);
-      return;
-    }
-  }
-
   setAddr('#addrUsb', s.web_usb);
   setAddr('#addrAp', s.web_ap);
+  setAddr('#addrFix', (s.ap==1 || s.usb==1) ? 'http://' + (s.fix_ip||'') + ':8080' : '');
 
   $('#apState').textContent = s.ap==1 ? '已开启' : '未开启';
   $('#apState').style.color = s.ap==1 ? 'var(--acc)' : 'var(--dim)';
-  pair('#apOn','#apOff', s.ap);
+  pairBtn('#apOn', '#apOff', s.ap);
+  tagOn('#apKeep', s.keep_wifi);
+  tagOn('#apBoot', s.boot_wifi);
+  hintLine('#apHint', s.ap, s.keep_wifi, s.boot_wifi);
 
   if(s.usb==1) $('#usbState').textContent = '已开启';
   else if(s.usb_online==1) $('#usbState').textContent = '已插线';
   else $('#usbState').textContent = '未开启';
   $('#usbState').style.color = s.usb==1 ? 'var(--acc)' : 'var(--dim)';
-  pair('#usbOn','#usbOff', s.usb);
+  pairBtn('#usbOn', '#usbOff', s.usb);
+  tagOn('#usbKeep', s.keep_usb);
+  tagOn('#usbBoot', s.boot_usb);
+  hintLine('#usbHint', s.usb, s.keep_usb, s.boot_usb);
 
   renderNet(s);
   renderTypes(s);
   renderAdb(s);
-
-  keepBtn('#keepWifi', s.keep_wifi, '热点');
-  keepBtn('#keepUsb', s.keep_usb, 'USB');
 
   $('#cnt').textContent = s.count ? `(${s.count})` : '';
   $('#devs').innerHTML = s.count
     ? s.clients.map(c=>`<tr><td>${c.ip}</td><td class="name"><span class="dot"></span>${c.host||'-'}</td><td>${c.mac}</td></tr>`).join('')
     : '<tr><td colspan="3" class="empty">暂无设备</td></tr>';
 
+  renderBatt(s);
+  $('#fwdTarget').textContent = s.target || '--';
+  $('#logSize').textContent = bytes(s.log_size) + ' / ' + bytes(s.log_max);
+  const lt = $('#logToggle');
+  lt.textContent = s.log_on ? '记录中' : '已暂停';
+  lt.classList.toggle('on', !!s.log_on);
+  renderFwdState(s);
+  renderFwd(s.fwd);
+}
+
+// 电量 / 充电这一块单独抽出来：卡片上的小刷新按钮只刷这里，不打断别的地方
+function renderBatt(s){
   const b = s.batt;
   $('#cap').textContent = b.cap;
   $('#bstat').textContent = BSTAT[b.status] || b.status || '';
@@ -390,15 +400,28 @@ function render(s){
     $('#rcap').value = b.rc; paint('#rcap','#rcapv');
   }
 
-  $('#chgdot').style.background = b.enabled ? 'var(--acc)' : '#555';
-  $('#chgtxt').textContent = b.enabled ? '控制器运行中' + (b.state==='off'?'（暂停充电）':'（充电中）') : '控制器已停止';
+  $('#chgdot').style.background = b.enabled ? (b.state==='off' ? 'var(--warn)' : 'var(--acc)') : '#555';
+  $('#chgtxt').textContent = chgText(b);
   $('#chgStart').classList.toggle('active', !!b.enabled);
   $('#chgStop').classList.toggle('active', !b.enabled);
   $('#chgch').textContent = chgDesc(b);
-  $('#fwdTarget').textContent = s.target || '--';
-  $('#logSize').textContent = bytes(s.log_size) + ' / ' + bytes(s.log_max);
-  renderFwdState(s);
-  renderFwd(s.fwd);
+}
+
+// 控制器状态说人话：插没插充电器、为什么停、是不是旁路供电
+function chgText(b){
+  if(!b.enabled) return '控制器已停止 · 按系统默认充电，不受阈值限制';
+  const p = b.plugged==1;
+  const stopped = b.state === 'off';
+  if(!p && !stopped) return '未插充电器 · 正在用电池';
+  if(!p && stopped) return '未插充电器 · 控制器开着，等接上充电器再判断';
+  if(stopped){
+    if(+(b.temp||0) >= +(b.mt||45)) return `已插充电器 · 温度 ${b.temp}℃ 过高，暂停充电`;
+    if(+(b.cap||0) >= +(b.pc||100)) return `已插充电器 · 电量 ${b.cap}% 已达上限 ${b.pc}%，停止充电（走充电器旁路供电）`;
+    return `已插充电器 · 暂停充电中（低于 ${b.rc}% 自动恢复）`;
+  }
+  if(b.status === 'Full') return '已插充电器 · 已充满，走充电器旁路供电';
+  if(+(b.cap||0) <= +(b.rc||0)) return `已插充电器 · 电量 ${b.cap}% 低于恢复阈值 ${b.rc}%，正在充电`;
+  return `已插充电器 · 正在充电（到 ${b.pc}% 停）`;
 }
 
 // 三行状态：手机能不能上网、连进来几台、USB 通不通、谁在发地址。
@@ -516,14 +539,10 @@ function renderAdb(s){
   $('#adbState').textContent = ADB_TXT[s.adb_tcp] || '--';
   $('#adbState').style.color = s.adb_tcp==1 ? 'var(--acc)'
     : (s.adb_tcp==2 ? 'var(--warn)' : 'var(--dim)');
-  $('#adbToggle').textContent = s.adb_tcp==1 ? '关闭' : '开启';
-  $('#adbToggle').classList.toggle('on', s.adb_tcp==1);
-
-  const boot = s.adb_boot==1;
-  const eb = $('#adbBoot');
-  eb.textContent = '自启';
-  eb.classList.toggle('on', boot);
-  eb.title = '开机自启：' + (boot ? '开' : '关');
+  pairBtn('#adbOn', '#adbOff', s.adb_tcp==1 ? 1 : 0);
+  tagOn('#adbKeep', s.adb_keep);
+  tagOn('#adbBoot', s.adb_boot);
+  hintLine('#adbHint', s.adb_tcp==1 ? 1 : 0, s.adb_keep, s.adb_boot);
 
   const resid = s.adb_persist || '';
   $('#adbResidueRow').style.display = resid ? 'flex' : 'none';
@@ -553,20 +572,20 @@ function renderFwdState(s){
   const el = $('#fwdState');
   const n = (s.fwd||[]).length;
   if(!n){
-    el.textContent = '没有设置转发端口。加上端口后，连热点的设备访问手机该端口会自动转到 USB 那台设备。';
+    el.textContent = '没有设置转发端口。加上端口后，访问 ' + (s.fix_ip||'') + ':端口 会自动转到 USB 那台设备。';
     el.style.color = '';
     return;
   }
   const st = s.fwd_state;
   const map = {
-    on: ['已生效（' + s.fwd_rules + ' 条规则）','var(--acc)'],
+    ok: ['已生效（' + s.fwd_rules + ' 条规则）','var(--acc)'],
     no_peer: ['规则已建，但对端还没连上','var(--warn)'],
-    no_usb: ['没有 USB 网卡，包没地方去','var(--bad)'],
     no_rule: ['规则没建成，把它删了重加一次','var(--bad)'],
+    none: ['',''],
     off: ['','']
   };
   const m = map[st] || ['状态未知',''];
-  const txt = n + ' 个端口 → ' + (s.target || '目标未知') + ' · ' + m[0];
+  const txt = n + ' 个端口 → ' + (s.target || '对端未知') + ' · ' + m[0];
   el.textContent = txt;
   el.style.color = m[1];
 }
@@ -629,10 +648,27 @@ async function fwdOp(op, port){
   }catch(e){ toast('操作失败'); }
 }
 
-function pair(onSel, offSel, on){
-  const a=$(onSel), b=$(offSel);
-  a.classList.toggle('active', on==1);
-  b.classList.toggle('active', on!=1);
+// 三个功能统一四个按钮：开启 / 关闭 / 保活 / 开机自启。
+// 开启、关闭互斥高亮；保活和开机自启各自独立，不受当前开关状态限制。
+function pairBtn(onSel, offSel, on){
+  const a=$(onSel), b=$(offSel); if(!a||!b) return;
+  a.classList.toggle('on', on==1);
+  b.classList.toggle('on', on!=1);
+}
+function tagOn(sel, on){
+  const el=$(sel); if(!el) return;
+  el.classList.toggle('on', on==1);
+  el._on = on==1 ? 1 : 0;
+}
+// 状态说明：只讲「自动行为」和当前状态的关系，不写术语
+function hintLine(sel, on, keep, boot){
+  const el=$(sel); if(!el) return;
+  const p = [];
+  if(keep==1) p.push('保活：被系统关掉会自动恢复');
+  if(boot==1) p.push('开机自启：重启后自动开启');
+  if(p.length && on!=1) p.push('当前是关闭状态');
+  el.textContent = p.join(' · ');
+  el.style.display = p.length ? 'block' : 'none';
 }
 
 function paintPower(b, s){
@@ -653,12 +689,20 @@ function paint(id, vid){
   $(id==='#pcap' ? '#pfill' : '#rfill').style.width = ((v-mn)/(mx-mn)*100)+'%';
 }
 
-function keepBtn(sel, on, name){
-  const el=$(sel); if(!el) return;
-  el._on = on==1 ? 1 : 0;
-  el.textContent = '保活';
-  el.classList.toggle('on', !!el._on);
-  el.title = name + '保活：' + (el._on ? '开' : '关');
+// 保活 / 开机自启：两个独立开关，走同一套接口
+async function setKeep(field, on){
+  const r = await api('keep', {[field]: on ? 1 : 0});
+  if(!r.ok){ toast('设置失败'); return; }
+  toast((field==='adb' ? '无线 ADB' : field==='wifi' ? '热点' : 'USB 共享')
+        + '保活已' + (on ? '开启' : '关闭'));
+  refresh();
+}
+async function setBoot(field, on){
+  const r = await api('boot', {[field]: on ? 1 : 0});
+  if(!r.ok){ toast('设置失败'); return; }
+  toast((field==='adb' ? '无线 ADB' : field==='wifi' ? '热点' : 'USB 共享')
+        + '开机自启已' + (on ? '开启' : '关闭'));
+  refresh();
 }
 
 async function refresh(){
@@ -670,6 +714,12 @@ async function refresh(){
 // 开关、设备上下线），单独刷这一块既快又不打断正在看的电量/转发设置。
 async function refreshNet(){
   try{ renderNet(await api('status')); }
+  catch(e){ console.warn(e); }
+}
+
+// 只刷「电量 / 充电」这一块。卡片上的小刷新按钮走这里，不动滑杆和别的卡片
+async function refreshBatt(){
+  try{ renderBatt(await api('status')); }
   catch(e){ console.warn(e); }
 }
 
@@ -727,6 +777,8 @@ async function setShare(type, on){
   if(nb && type!=='usb'){
     try{
       const r = nb.setHotspot(!!on);
+      // 告诉模块这次是手动开/关，保活据此让路，不再把用户关掉的热点重新拉起
+      api('intent',{what:'wifi',on:on?1:0}).catch(()=>{});
       toast(r || ('已请求' + (on?'开启':'关闭') + name));
       setTimeout(refresh, 2500);
     }catch(e){ toast('调用特权接口失败：'+e); }
@@ -738,10 +790,14 @@ async function setShare(type, on){
     setTimeout(refresh, 2500);
   }catch(e){ toast('操作失败'); }
 }
-$('#apOn').addEventListener('click', ()=>setShare('wifi',true));
-$('#apOff').addEventListener('click', ()=>setShare('wifi',false));
-$('#usbOn').addEventListener('click', ()=>setShare('usb',true));
-$('#usbOff').addEventListener('click', ()=>setShare('usb',false));
+$('#apOn').addEventListener('click', ()=>setShare('wifi', 1));
+$('#apOff').addEventListener('click', ()=>setShare('wifi', 0));
+$('#usbOn').addEventListener('click', ()=>setShare('usb', 1));
+$('#usbOff').addEventListener('click', ()=>setShare('usb', 0));
+$('#apKeep').addEventListener('click', ()=>setKeep('wifi', !(ST.keep_wifi==1)));
+$('#usbKeep').addEventListener('click', ()=>setKeep('usb', !(ST.keep_usb==1)));
+$('#apBoot').addEventListener('click', ()=>setBoot('wifi', !(ST.boot_wifi==1)));
+$('#usbBoot').addEventListener('click', ()=>setBoot('usb', !(ST.boot_usb==1)));
 
 // USB 网络类型切换：对端看不到网卡时是这里的问题，不是 DHCP
 async function setNet(v){
@@ -764,16 +820,10 @@ async function setAdb(on){
     setTimeout(refresh, 1600);
   }catch(e){ toast('操作失败'); }
 }
-$('#adbToggle').addEventListener('click', ()=>setAdb(!(ST.adb_tcp==1)));
-$('#adbBoot').addEventListener('click', async ()=>{
-  const v = ST.adb_boot==1 ? 0 : 1;
-  try{
-    const r = await api('adbboot',{on:v});
-    if(!r || !r.ok){ toast('设置失败'); return; }
-    toast('开机自启已' + (v?'开启':'关闭'));
-    setTimeout(refresh, 600);
-  }catch(e){ toast('设置失败'); }
-});
+$('#adbOn').addEventListener('click', ()=>setAdb(1));
+$('#adbOff').addEventListener('click', ()=>setAdb(0));
+$('#adbKeep').addEventListener('click', ()=>setKeep('adb', !(ST.adb_keep==1)));
+$('#adbBoot').addEventListener('click', ()=>setBoot('adb', !(ST.adb_boot==1)));
 $('#adbClear').addEventListener('click', async ()=>{
   try{
     const r = await api('clearpersist', {});
@@ -781,20 +831,6 @@ $('#adbClear').addEventListener('click', async ()=>{
     setTimeout(refresh, 1200);
   }catch(e){ toast('清理失败'); }
 });
-
-async function toggleKeep(key, sel){
-  const el=$(sel);
-  const v = el._on ? 0 : 1;
-  try{
-    const ex = {}; ex[key]=v;
-    const j = await api('keep', ex);
-    if(!j.ok) throw new Error();
-    toast((key==='wifi'?'热点':'USB 共享') + '保活已' + (v?'开启':'关闭'));
-    refresh();
-  }catch(e){ toast('设置失败'); }
-}
-$('#keepWifi').addEventListener('click', ()=>toggleKeep('wifi','#keepWifi'));
-$('#keepUsb').addEventListener('click', ()=>toggleKeep('usb','#keepUsb'));
 
 $('#chgStart').addEventListener('click', async ()=>{ await api('chg',{op:'start'}); toast('已启动充电控制'); setTimeout(refresh,900); });
 $('#chgRestart').addEventListener('click', async ()=>{ await api('chg',{op:'restart'}); toast('已重启充电控制'); setTimeout(refresh,1600); });
@@ -831,8 +867,17 @@ $('#logClear').addEventListener('click', async ()=>{
   loadLog();
 });
 
-$('#hardReload').addEventListener('click', hardReload);
+$('#logToggle').addEventListener('click', async ()=>{
+  const on = $('#logToggle').classList.contains('on') ? 0 : 1;
+  try{
+    await api('logsw', {on:String(on)});
+    toast(on ? '日志记录已开启' : '日志记录已暂停');
+    refresh();
+  }catch(e){ toast('切换失败'); }
+});
+
 $('#netRefresh').addEventListener('click', ()=>{ refreshNet(); toast('网络状态已刷新'); });
+$('#battRefresh').addEventListener('click', ()=>{ refreshBatt(); toast('电量已刷新'); });
 paint('#pcap','#pcapv');
 paint('#rcap','#rcapv');
 refresh();

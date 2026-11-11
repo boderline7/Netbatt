@@ -1,6 +1,6 @@
 id=netbatt
 name=NetBatt - 热点网段 / 电量控制
-version=v3.1.12
-versionCode=322
+version=v3.1.22
+versionCode=332
 author=local
-description=只做一件事：把内网 Wi-Fi（热点）和 USB 共享打通，两边设备可直接互访。热点与 USB 的地址、DHCP 全部交给系统 tethering，模块不固定 IP、不写网段、不抢 67。热点开关、USB 共享开关、充电阈值控制、无线 ADB 保留。自带运行日志（3MB 滚动，网页可看可导出）。
+description=只做两件事：把内网 Wi-Fi（热点）和 USB 共享打通，两边设备可直接互访；给控制台一个固定入口 http://10.1.2.3:8080（旁挂 /32，不占网段、不抢 67，热点/USB 重开自动恢复），配置过的转发端口自动转到当前 USB 设备。热点与 USB 的地址、DHCP 全部交给系统 tethering。热点开关、USB 共享开关、充电阈值控制、无线 ADB 保留。自带运行日志（3MB 滚动，网页可看可导出）。

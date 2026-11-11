@@ -19,8 +19,12 @@ if [ "$(cat "$MARK" 2>/dev/null)" != "$VC" ]; then
 fi
 
 sleep 8
+# 上一轮手动关闭留下的暂停标记只对当次开机有效：开机重来，自启开关说了算
+rm -f /data/adb/netbatt/wifi.off /data/adb/netbatt/usb.off /data/adb/netbatt/adb.off 2>/dev/null
 sh "$MODDIR/bin/netbatt.sh" init >/dev/null 2>&1
 # adb 恢复要等 adbd 真起来，最多 40 秒，放后台别挡网页服务
 $BB setsid sh -c '. /data/adb/modules/netbatt/bin/nb-lib.sh; adb_tcp_restore' >/dev/null 2>&1 &
+# 开机自启：只按 BOOT_WIFI / BOOT_USB 拉一次，和「保活」无关
+$BB setsid sh -c '. /data/adb/modules/netbatt/bin/nb-lib.sh; boot_autostart' >/dev/null 2>&1 &
 sh "$MODDIR/bin/netbatt.sh" web
 $BB setsid sh "$MODDIR/bin/loop.sh" >/dev/null 2>&1 &

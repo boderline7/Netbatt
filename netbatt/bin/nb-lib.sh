@@ -31,7 +31,13 @@ CHG_SOC_OFF=5
 CHG_SOC_ON=100
 KEEP_WIFI=0
 KEEP_USB=0
-# 热点设备访问本机这个端口时，转发给 USB 端那台固定设备
+ADB_KEEP=0
+# 开机自启：和「保活」分开。保活管运行期被系统关掉，开机自启只管开机这一次
+BOOT_WIFI=0
+BOOT_USB=0
+# 控制台的固定入口。旁挂成 /32，不占网段、不参与 DHCP，热点/USB 重开都会补回来。
+# 其余端口 DNAT 到当前 USB 对端（整机转发，8080 留在本机）。
+FIXIP=10.1.2.3
 FWDPORT=18765
 # USB 网络功能类型。对端看不到网卡时换的就是这里：
 #   rndis  兼容性最好，Android/Windows/Linux 都认，随身 WiFi 基本都是这一类
@@ -58,6 +64,8 @@ ADB_BOOT=1
 USB_DHCP_TAKEOVER=0
 # 运行日志单文件上限（字节）。写满滚成 netbatt.log.1，只留一份历史，最多约 2 倍
 LOG_MAX=3145728
+# 日志记录开关。关掉后 log() 直接返回，不再写盘（网页上仍能看已有内容）
+LOG_ON=1
 # 周期采样间隔（秒）。loop 每 5 秒一轮，太密会刷满日志，默认 15 秒记一行电量/功率
 SAMPLE_INT=15
 
@@ -80,7 +88,11 @@ CHG_SOC_OFF=$CHG_SOC_OFF
 CHG_SOC_ON=$CHG_SOC_ON
 KEEP_WIFI=$KEEP_WIFI
 KEEP_USB=$KEEP_USB
+ADB_KEEP=$ADB_KEEP
+BOOT_WIFI=$BOOT_WIFI
+BOOT_USB=$BOOT_USB
 FWDPORT=$FWDPORT
+FIXIP=$FIXIP
 USB_NET=$USB_NET
 USB_NATIVE=$USB_NATIVE
 ADB_TCP=$ADB_TCP
@@ -88,6 +100,7 @@ ADB_PORT=$ADB_PORT
 ADB_BOOT=$ADB_BOOT
 USB_DHCP_TAKEOVER=$USB_DHCP_TAKEOVER
 LOG_MAX=$LOG_MAX
+LOG_ON=$LOG_ON
 SAMPLE_INT=$SAMPLE_INT
 EOC
 fi
@@ -103,12 +116,26 @@ EOC
 fi
 
 # 升级上来的老配置缺新键时补默认值；已有的键一律不动
-for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728" "SAMPLE_INT=15"; do
+for kv in "USB_NET=auto" "USB_NATIVE=1" "ADB_TCP=0" "ADB_PORT=5555" "ADB_BOOT=1" "USB_DHCP_TAKEOVER=0" "LOG_MAX=3145728" "SAMPLE_INT=15" "FIXIP=10.1.2.3" "LOG_ON=1"; do
   $BB grep -q "^${kv%%=*}=" "$CFG" 2>/dev/null || echo "$kv" >> "$CFG"
 done
 
 . "$CFG"
 
+# v3.1.19 把「自启」拆成两个独立开关：保活（运行期自动恢复）和开机自启（只拉起一次）。
+# 老配置只有一个 KEEP_*，语义是「保活 + 开机自启」，所以两项都按老值初始化。
+if ! $BB grep -q '^BOOT_WIFI=' "$CFG" 2>/dev/null; then
+  echo "BOOT_WIFI=$KEEP_WIFI" >> "$CFG"
+  BOOT_WIFI=$KEEP_WIFI
+fi
+if ! $BB grep -q '^BOOT_USB=' "$CFG" 2>/dev/null; then
+  echo "BOOT_USB=$KEEP_USB" >> "$CFG"
+  BOOT_USB=$KEEP_USB
+fi
+if ! $BB grep -q '^ADB_KEEP=' "$CFG" 2>/dev/null; then
+  echo "ADB_KEEP=$ADB_BOOT" >> "$CFG"
+  ADB_KEEP=$ADB_BOOT
+fi
 # v2.8.0 把默认路径切成系统 tethering。老配置里的 USB_NATIVE=0 是上一版默认值
 # 灌进去的，不是用户主动选的，所以升级时按 seed 标记纠正一次；之后用户自己改的照旧。
 if ! $BB grep -q '^CFG_SEED=' "$CFG" 2>/dev/null; then
@@ -166,6 +193,7 @@ log_size() {
 # 滚动必须在写之前做：一次写只多几十字节，超一点无所谓，不能让它无界增长。
 # 这里直接 printf，不走 log()，否则递归。
 log_rotate() {
+  [ "${LOG_ON:-1}" = "1" ] || return 0
   [ "$(log_size "$LOG")" -ge "${LOG_MAX:-3145728}" ] || return 0
   mv -f "$LOG" "$LOG1" 2>/dev/null
   : > "$LOG" 2>/dev/null
@@ -174,6 +202,7 @@ log_rotate() {
 }
 
 log() {
+  [ "${LOG_ON:-1}" = "1" ] || return 0
   log_rotate
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG" 2>/dev/null
 }
@@ -397,6 +426,8 @@ apply() {
 
   # 热点 ↔ USB 互访：本模块唯一负责的网络功能
   bridge_sync
+  # 控制台固定入口（/32 旁挂 + 其余端口 DNAT 到当前 USB 对端）
+  fix_sync
 
   ns=$(usb_net_state)
   log_chg usbnet "$ns" "USB 链路: $ns"
@@ -433,7 +464,8 @@ usb_peer() {
 # 接口上第一个 IPv4 的 /24（Android 的 tethering 网段都是 /24）
 iface_net24() {
   [ -n "$1" ] || return 1
-  n=$(ip -o -4 addr show dev "$1" 2>/dev/null | $BB awk '$4 !~ /^127\./ {print $4; exit}')
+  # 跳过固定入口 /32，否则会把 10.1.2.0/24 当成接口的主网段
+  n=$(ip -o -4 addr show dev "$1" 2>/dev/null | $BB awk -v fx="$FIXIP/" 'index($4,fx)!=1 && $4 !~ /^127\./ {print $4; exit}')
   [ -n "$n" ] || return 1
   echo "$n" | $BB awk -F'[./]' '{print $1"."$2"."$3".0/24"}'
 }
@@ -521,6 +553,55 @@ bridge_sync() {
   log_chg br "$key" "桥接: 已打通 热点 $anet ↔ USB $unet（转发 + 双向 NAT）"
 }
 
+# ---------- 控制台固定入口 ----------
+# 给活动接口旁挂一个 /32（不占网段、不发 DHCP、不抢 67），让控制台地址永远固定。
+# 8080 留在本机网页，其余端口整机 DNAT 给当前 USB 对端；对端换了或重启换了地址，
+# 下一轮从邻居表重新取，你不用改任何配置。
+FIX_CHAIN=NETBATT_FIX
+
+fix_sync() {
+  # 只给已经拿到系统地址的接口挂 /32。网卡刚建还没地址时挂上去，会带偏
+  # ap_running 和网段推导（把 /32 当成接口的主网段）。
+  for i in $(ap_iface) $(usb_ifaces); do
+    ip link show "$i" >/dev/null 2>&1 || continue
+    ip -o -4 addr show dev "$i" 2>/dev/null | $BB awk -v fx="$FIXIP/" \
+      'index($4,fx)!=1 && $4 !~ /^127\./ {f=1} END{exit !f}' || continue
+    ip -o -4 addr show dev "$i" 2>/dev/null | $BB grep -q " $FIXIP/" && continue
+    ip addr add "$FIXIP/32" dev "$i" 2>/dev/null
+  done
+
+  peer=$(usb_peer)
+  ports=$(fwd_list)
+
+  iptables -t nat -N "$FIX_CHAIN" 2>/dev/null
+  iptables -t nat -C PREROUTING -d "$FIXIP" -j "$FIX_CHAIN" 2>/dev/null || \
+    iptables -t nat -I PREROUTING -d "$FIXIP" -j "$FIX_CHAIN" 2>/dev/null
+
+  # 对端地址或端口清单变了才重建，避免每 5 秒刷规则
+  key="${peer:-none}|$ports"
+  if [ "$($BB cat "$DATA/fix.key" 2>/dev/null)" != "$key" ]; then
+    iptables -t nat -F "$FIX_CHAIN" 2>/dev/null
+    # 控制台自己留在本机
+    iptables -t nat -A "$FIX_CHAIN" -p tcp --dport "$PORT" -j RETURN 2>/dev/null
+    if [ -n "$peer" ]; then
+      # 对端自己访问固定 IP 时别再转回它自己
+      iptables -t nat -A "$FIX_CHAIN" -s "$peer" -j RETURN 2>/dev/null
+      # 只转用户配置过的端口，不整机 DMZ
+      for p in $ports; do
+        iptables -t nat -A "$FIX_CHAIN" -p tcp --dport "$p" -j DNAT --to-destination "$peer" 2>/dev/null
+      done
+    fi
+    echo "$key" > "$DATA/fix.key"
+    log "固定入口: $FIXIP:$PORT 留本机，转发端口 ${ports:-无} → ${peer:-无 USB 对端}"
+  fi
+}
+
+fix_state() {
+  [ -n "$(fwd_list)" ] || { echo none; return; }
+  [ -n "$(usb_peer)" ] || { echo no_peer; return; }
+  iptables -t nat -S "$FIX_CHAIN" 2>/dev/null | $BB grep -q -- 'DNAT' && echo ok || echo no_rule
+}
+
 fwd_list() {
   [ -f "$DATA/fwd.list" ] || return 0
   $BB cat "$DATA/fwd.list" | $BB tr '\n' ' ' | $BB sed 's/ *$//'
@@ -600,7 +681,8 @@ fwd_cleanup() {
   iptables -t nat -X NETBATT_FWD 2>/dev/null
   iptables -t nat -F NETBATT_SNAT 2>/dev/null
   iptables -t nat -X NETBATT_SNAT 2>/dev/null
-  rm -f "$DATA/fwd.list" "$DATA/fwd.target"
+  # 只清旧链。fwd.list 是用户手填的端口，必须留着，除非用户自己删
+  rm -f "$DATA/fwd.target"
 }
 
 # 转发到底有没有在跑：页面用它给一句话结论，免得只看到「已开启」却不通
@@ -617,11 +699,13 @@ fwd_add() {
   p="$1"
   case "$p" in ''|*[!0-9]*) return 1;; esac
   [ "$p" -ge 1 ] && [ "$p" -le 65535 ] || return 1
+  # 8080 是控制台自己，不能被转发占走
+  [ "$p" = "$PORT" ] && return 1
   cur=$(fwd_list)
   case " $cur " in *" $p "*) return 0;; esac
   echo "$cur $p" | $BB sed 's/^ *//' > "$DATA/fwd.list"
   log "端口转发: 添加 $p -> $(usb_peer)"
-  sync_fwd
+  fix_sync
 }
 
 fwd_del() {
@@ -630,7 +714,7 @@ fwd_del() {
   for x in $cur; do [ "$x" = "$p" ] || new="$new $x"; done
   echo $new > "$DATA/fwd.list"
   log "端口转发: 移除 $p"
-  sync_fwd
+  fix_sync
 }
 
 lease_host() {
@@ -707,9 +791,12 @@ chg_detect() {
     "/sys/class/power_supply/battery/batt_slate_mode:0:1" \
     "$CHG_SWITCH:$CHG_ON:$CHG_OFF"
   do
-    p=${spec%%:*}; r=${spec#*:}; on=${r%%:*}; off=${r#*:}
-    chg_writable "$p" || continue
-    CHG_CH=switch; CHG_NODE=$p; CHG_ON=$on; CHG_OFF=$off
+    # 变量名不能用 p：chg_writable 内部也用 p 存 stat 结果，会把路径冲掉，
+    # 结果 CHG_NODE 变成 "-rw-rw----" 这种权限串，写入落到一个不存在的文件上，
+    # 表现就是「充电控制开着但完全不起作用」。
+    np=${spec%%:*}; r=${spec#*:}; non=${r%%:*}; noff=${r#*:}
+    chg_writable "$np" || continue
+    CHG_CH=switch; CHG_NODE=$np; CHG_ON=$non; CHG_OFF=$noff
     return 0
   done
 
@@ -875,9 +962,17 @@ batt_json() {
   socv=$(cat "$DATA/soc.orig" 2>/dev/null)
   [ -z "$socv" ] && socv=$(cat "$CHG_NODE" 2>/dev/null)
   [ -z "$socv" ] && socv=0
-  printf '{"cap":%s,"status":"%s","temp":%s,"ma":%s,"a":%s,"w":%s,"dir":"%s","usb_max":%s,"pc":%s,"rc":%s,"enabled":%s,"sw":"%s","state":"%s","ch":"%s","node":"%s","plat":"%s","soc_orig":%s}' \
+  # 充电器在不在：有 usb/online 就看它（暂停充电时 status 会变成 Discharging，
+  # 但线还插着，光看 status 会误判成「没插充电器」）
+  pl=$(cat /sys/class/power_supply/usb/online 2>/dev/null)
+  case "$pl" in
+    0|1) ;;
+    *) case "$st" in Charging|Full) pl=1 ;; *) pl=0 ;; esac ;;
+  esac
+  case "$st" in Charging|Full) pl=1 ;; esac
+  printf '{"cap":%s,"status":"%s","temp":%s,"ma":%s,"a":%s,"w":%s,"dir":"%s","usb_max":%s,"pc":%s,"rc":%s,"enabled":%s,"sw":"%s","state":"%s","ch":"%s","node":"%s","plat":"%s","soc_orig":%s,"plugged":%s,"mt":%s}' \
     "$cap" "$st" "$temp" "$ma" "$amp" "$watt" "$dir" "$umax" "$PAUSE_CAP" "$RESUME_CAP" "$(chg_active)" "$sw" \
-    "$(cat $DATA/chg.state 2>/dev/null || echo on)" "$CHG_CH" "$CHG_NODE" "$(chg_platform)" "$socv"
+    "$(cat $DATA/chg.state 2>/dev/null || echo on)" "$CHG_CH" "$CHG_NODE" "$(chg_platform)" "$socv" "$pl" "$MAX_TEMP"
 }
 
 # ---------- 状态 / 控制 ----------
@@ -1157,6 +1252,16 @@ usb_up() {
   case "$(getprop sys.usb.config)$(getprop sys.usb.state)" in
     *rndis*|*ncm*|*ecm*) echo 1; return 0 ;;
   esac
+  # 厂商 HAL 建 tethering 时 sys.usb.config 可能一直是 mtp,adb（vivo 实测），
+  # 属性看不出共享已开。以真实网卡为准。
+  # 注意：关掉共享后系统会把链路置成 DOWN/NO-CARRIER，但地址会残留下来，
+  # 只看「有没有地址」会把已关闭误判成已开启，所以必须同时要求链路是通的。
+  for i in $(usb_ifaces 2>/dev/null); do
+    ip -o link show dev "$i" 2>/dev/null | $BB grep -q 'NO-CARRIER' && continue
+    # 只认系统发的地址；模块自己旁挂的 /32 固定入口不算共享已开
+    ip -o -4 addr show dev "$i" 2>/dev/null | $BB grep 'inet ' | $BB grep -qv "inet $FIXIP/" || continue
+    echo 1; return 0
+  done
   echo 0
 }
 
@@ -1494,33 +1599,82 @@ usb_dhcp_tick() {
   return 0
 }
 
+# 用户手动关过的标记：关闭就是关闭，保活不再和用户抢。
+# 重新开启、或下一次开机时清掉（开机后自启照常生效）。
+user_off() { [ -f "$DATA/$1.off" ] && echo 1 || echo 0; }
+user_off_set() {
+  case "$2" in
+    1) : > "$DATA/$1.off" ;;
+    *) rm -f "$DATA/$1.off" ;;
+  esac
+}
+
 # 永久保活：被系统关掉就重新拉起
 keepalive() {
-  if [ "$KEEP_WIFI" = 1 ] && [ "$(ap_running)" = 0 ]; then
+  if [ "$KEEP_WIFI" = 1 ] && [ "$(user_off wifi)" = 0 ] && [ "$(ap_running)" = 0 ]; then
     # 热点掉线诊断：记下当时的上下文，方便判断是系统主动关的、还是上行断了
     # 单 WiFi 通道机型开热点会让 wlan0 掉线，若又没有蜂窝数据，热点下的设备全都上不了网。
     log_chg apdrop "$(uplink_state):$(usb_online):$(getprop sys.usb.config)" \
       "热点: 检测到已关闭，保活重新拉起（上行 $(uplink_state) USB $(usb_online) config=$(getprop sys.usb.config)）"
     hs wifi 1
   fi
-  if [ "$KEEP_USB" = 1 ] && [ "$(usb_online)" = 1 ] && [ "$(usb_off_flag)" = 0 ]; then
-    # native 模式由系统自己维持，模块插手重建 gadget 只会打断它的 tethering
-    [ "$USB_NATIVE" = 1 ] && return 0
-    fn=$(usb_net_pick)
-    # 系统插拔后会回落成 mtp,adb，网卡就没了，这里按选定类型补回来
-    case "$(getprop sys.usb.config)" in
-      *"$fn"*) ;;
-      *) hs usb 1 ;;
-    esac
+  if [ "$KEEP_USB" = 1 ] && [ "$(user_off usb)" = 0 ] && [ "$(usb_online)" = 1 ] && [ "$(usb_up)" = 0 ]; then
+    # native 模式下系统确实会自己维持 tethering，但拔插/系统回收之后它不会主动
+    # 重新开共享，表现为「线插着、网卡 NO-CARRIER、对端没有网络」。这里补一次拉起，
+    # 60 秒冷却：拉起会重新枚举 USB，adb 会瞬断，不能每 5 秒来一次。
+    now=$(date +%s); last=$($BB cat "$DATA/usb.try" 2>/dev/null)
+    if [ -z "$last" ] || [ $(( now - last )) -ge 60 ]; then
+      printf '%s\n' "$now" > "$DATA/usb.try" 2>/dev/null
+      log "USB: 线已连接但共享未开，保活重新拉起"
+      hs usb 1
+    fi
   fi
+  adb_keepalive
+}
+
+# 无线 ADB 保活：只受「保活」开关约束，不需要 ADB_TCP 先为 1；
+# 用户手动关过（adb.off）就跳过，避免和用户的关闭操作抢。
+# 60 秒冷却：个别 ROM 不认 tcp 端口，别每 5 秒重启一次 adbd。
+adb_keepalive() {
+  [ "$ADB_KEEP" = 1 ] || return 0
+  [ "$(user_off adb)" = 0 ] || return 0
+  [ "$(adb_tcp_code)" = 1 ] && return 0
+  now=$(date +%s); last=$($BB cat "$DATA/adb.try" 2>/dev/null)
+  [ -n "$last" ] && [ $((now - last)) -lt 60 ] && return 0
+  echo "$now" > "$DATA/adb.try"
+  log "无线 ADB: 保活发现未监听，重新开启"
+  adb_tcp_on "$ADB_PORT" >/dev/null 2>&1
 }
 
 set_keep() {
   case "$1" in
-    wifi) cfg_set KEEP_WIFI "$2"; KEEP_WIFI="$2"; log "保活: 热点 ${2}"; echo 0 ;;
-    usb)  cfg_set KEEP_USB "$2";  KEEP_USB="$2";  log "保活: USB 共享 ${2}"; echo 0 ;;
+    wifi) cfg_set KEEP_WIFI "$2"; KEEP_WIFI="$2"; [ "$2" = 1 ] && user_off_set wifi 0; log "保活: 热点 ${2}"; echo 0 ;;
+    usb)  cfg_set KEEP_USB "$2";  KEEP_USB="$2";  [ "$2" = 1 ] && user_off_set usb 0;  log "保活: USB 共享 ${2}"; echo 0 ;;
+    adb)  cfg_set ADB_KEEP "$2";  ADB_KEEP="$2";  [ "$2" = 1 ] && user_off_set adb 0;  log "保活: 无线 ADB ${2}"; echo 0 ;;
     *) echo 1 ;;
   esac
+}
+
+# 开机自启只拉到「开」，具体开没开由系统如实反馈；不碰保活标记
+set_boot() {
+  case "$1" in
+    wifi) cfg_set BOOT_WIFI "$2"; BOOT_WIFI="$2"; log "开机自启: 热点 ${2}"; echo 0 ;;
+    usb)  cfg_set BOOT_USB "$2";  BOOT_USB="$2";  log "开机自启: USB 共享 ${2}"; echo 0 ;;
+    adb)  cfg_set ADB_BOOT "$2";  ADB_BOOT="$2";  log "开机自启: 无线 ADB ${2}"; echo 0 ;;
+    *) echo 1 ;;
+  esac
+}
+
+# 开机时执行一次：只按「开机自启」开关拉，和保活无关
+boot_autostart() {
+  if [ "$BOOT_WIFI" = 1 ]; then
+    log "开机自启: 拉起热点"
+    hs wifi 1 >/dev/null 2>&1
+  fi
+  if [ "$BOOT_USB" = 1 ] && [ "$(usb_online)" = 1 ]; then
+    log "开机自启: 拉起 USB 共享"
+    hs usb 1 >/dev/null 2>&1
+  fi
 }
 
 # ---------- 无线 ADB ----------
@@ -1560,6 +1714,7 @@ adb_tcp_on() {
   cfg_set ADB_TCP 1
   cfg_set ADB_PORT "$p"
   ADB_TCP=1; ADB_PORT="$p"
+  rm -f "$DATA/adb.off"
   log "无线 ADB: 开启 tcp:$p · 监听 $(adb_tcp_code)（1=正常 2=已配置未监听）"
   return 0
 }
@@ -1581,6 +1736,7 @@ adb_tcp_off() {
   fi
   cfg_set ADB_TCP 0
   ADB_TCP=0
+  : > "$DATA/adb.off"
   log "无线 ADB: 已关闭，service.adb.tcp.port 清空"
   return 0
 }
@@ -1591,6 +1747,8 @@ adb_boot_set() {
   cfg_set ADB_BOOT "$v"
   ADB_BOOT="$v"
   if [ "$v" = "1" ]; then
+    # 重新打开自启就等于恢复保活，清掉上次手动关闭留下的让步标记
+    user_off_set adb 0
     log "无线 ADB: 开机自启已开"
   else
     log "无线 ADB: 开机自启已关"
@@ -1620,7 +1778,6 @@ adb_persist_clear() {
 # 开机恢复：等 adbd 真起来再改端口，太早设会被 init 覆盖
 adb_tcp_restore() {
   [ "$ADB_BOOT" = 1 ] || return 0
-  [ "$ADB_TCP" = 1 ] || return 0
   wait_for 40 adbd_running
   # 起来之后再让几秒：adbd 刚 ready 时设端口，偶尔会被 init 的默认值盖回去
   $BB sleep 5 2>/dev/null || sleep 5
@@ -1699,26 +1856,27 @@ status_json() {
   fl=$(fwd_list)
   fj="[]"
   [ -n "$fl" ] && fj="[$(echo $fl | $BB tr ' ' ',')]"
-  tg=$(usb_peer)
-
   cat <<EOF
 {"prefix":"$PREFIX","gw":"$GW","pool_start":$POOL_START,"pool_end":$POOL_END,"build":$(nb_build),
-"ifaces":[$ij],"clients":$cj,"count":$cnt,"fwd":$fj,"target":"$tg",
+"ifaces":[$ij],"clients":$cj,"count":$cnt,"fwd":$fj,"target":"$(usb_peer)",
 "batt":$(batt_json),"ap":$(ap_running),
 "usb":$(usb_up),"usb_online":$(usb_online),"keep_wifi":$KEEP_WIFI,"keep_usb":$KEEP_USB,
 "usb_func":"$(usb_net_pick)","usb_net_cfg":"$USB_NET","usb_native":$USB_NATIVE,"usb_linked":$(usb_func_linked),"usb_mode":"$( [ -n "$(usb_ifaces 2>/dev/null)" ] && $BB cat "$DATA/usb.mode" 2>/dev/null | $BB tr -d '\n' )",
 "usb_types":"$(usb_funcs)","usb_peer":"$(usb_peer)","usb_peer_net":"$(usb_peer_net)",
-"fwd_state":"$(fwd_state)","fwd_rules":"$(iptables -t nat -S NETBATT_FWD 2>/dev/null | $BB grep -c -- '--dport')",
+"fwd_state":"$(fix_state)","fwd_rules":"$(iptables -t nat -S NETBATT_FIX 2>/dev/null | $BB grep -c -- 'DNAT')",
 "web_usb":"$(web_url_usb)","web_ap":"$(web_url_ap)",
 "adb_tcp":$(adb_tcp_code),"adb_port":"$(getprop service.adb.tcp.port)","adb_boot":$ADB_BOOT,"adb_persist":"$(getprop persist.adb.tcp.port)",
+"hold_wifi":$(user_off wifi),"hold_usb":$(user_off usb),"hold_adb":$(user_off adb),
+"boot_wifi":$BOOT_WIFI,"boot_usb":$BOOT_USB,"adb_keep":$ADB_KEEP,
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
 "bridge":"$($BB cat "$DATA/bridge.state" 2>/dev/null || echo off)",
 "bridge_ap":"$($BB cat "$DATA/bridge.ap" 2>/dev/null)",
 "bridge_usb":"$($BB cat "$DATA/bridge.usb" 2>/dev/null)",
+"fix_ip":"$FIXIP",
 "usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",
 "sys_dhcp":$(sys_dhcp_any && echo 1 || echo 0),
-"log_size":$(log_size "$LOG"),"log_old":$(log_size "$LOG1"),"log_max":${LOG_MAX:-3145728},
+"log_size":$(log_size "$LOG"),"log_old":$(log_size "$LOG1"),"log_max":${LOG_MAX:-3145728},"log_on":${LOG_ON:-1},
 "dnsmasq":$([ -f "$DATA/dnsmasq.pid" ] && kill -0 "$(cat $DATA/dnsmasq.pid)" 2>/dev/null && echo 1 || echo 0)}
 EOF
 }

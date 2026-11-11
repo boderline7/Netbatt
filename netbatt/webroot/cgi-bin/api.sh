@@ -65,10 +65,19 @@ case "$a" in
     esac
     ;;
   keep)
-    kw=$(get wifi); ku=$(get usb)
+    kw=$(get wifi); ku=$(get usb); ka=$(get adb)
     [ -n "$kw" ] && set_keep wifi "$kw" >/dev/null
     [ -n "$ku" ] && set_keep usb "$ku" >/dev/null
-    echo "{\"ok\":1,\"keep_wifi\":$KEEP_WIFI,\"keep_usb\":$KEEP_USB}"
+    [ -n "$ka" ] && set_keep adb "$ka" >/dev/null
+    echo "{\"ok\":1,\"keep_wifi\":$KEEP_WIFI,\"keep_usb\":$KEEP_USB,\"keep_adb\":$ADB_KEEP}"
+    ;;
+  boot)
+    # 开机自启和保活分开：这里只写开机那一次的行为
+    kw=$(get wifi); ku=$(get usb); ka=$(get adb)
+    [ -n "$kw" ] && set_boot wifi "$kw" >/dev/null
+    [ -n "$ku" ] && set_boot usb "$ku" >/dev/null
+    [ -n "$ka" ] && set_boot adb "$ka" >/dev/null
+    echo "{\"ok\":1,\"boot_wifi\":$BOOT_WIFI,\"boot_usb\":$BOOT_USB,\"boot_adb\":$ADB_BOOT}"
     ;;
   settings)
     am start -a android.settings.TETHER_SETTINGS >/dev/null 2>&1
@@ -134,6 +143,17 @@ case "$a" in
     log_clear
     echo '{"ok":1}'
     ;;
+  logsw)
+    v=$(get on); [ "$v" = "1" ] || v=0
+    if [ "$v" = "1" ]; then
+      cfg_set LOG_ON 1; LOG_ON=1
+      log "日志记录: 开启"
+    else
+      log "日志记录: 关闭"
+      cfg_set LOG_ON 0; LOG_ON=0
+    fi
+    echo "{\"ok\":1,\"log_on\":$v}"
+    ;;
   logdump)
     p=$(log_export)
     if [ -n "$p" ]; then
@@ -141,6 +161,21 @@ case "$a" in
     else
       echo '{"ok":0,"error":"export_failed"}'
     fi
+    ;;
+  hs)
+    t=$(get type); v=$(get on); [ "$v" = "0" ] || v=1
+    case "$t" in wifi|usb) ;; *) echo '{"ok":0,"error":"bad_type"}'; exit 0 ;; esac
+    # 关闭时落标记，保活不再和用户抢；开启时清掉
+    if [ "$v" = 1 ]; then user_off_set "$t" 0; else user_off_set "$t" 1; fi
+    hs "$t" "$v" >/dev/null 2>&1 &
+    echo '{"ok":1}'
+    ;;
+  intent)
+    # 热点开关走特权应用（NativeBridge），模块看不到那次点击，由页面回报意图
+    t=$(get what); v=$(get on)
+    case "$t" in wifi|usb|adb) ;; *) echo '{"ok":0,"error":"bad_type"}'; exit 0 ;; esac
+    if [ "$v" = 1 ]; then user_off_set "$t" 0; else user_off_set "$t" 1; fi
+    echo '{"ok":1}'
     ;;
   *)
     echo '{"ok":0,"error":"unknown_action"}'

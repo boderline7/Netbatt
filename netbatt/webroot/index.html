@@ -203,9 +203,9 @@ td.name{font-family:inherit}
   <div class="stat">
     <span class="sd" id="s4d"></span>
     <div class="sm">
-      <div class="sl">地址分配</div>
+      <div class="sl">Wi-Fi ↔ USB 互访</div>
       <div class="sv" id="s4v">--</div>
-      <div class="sx" id="s4x">谁在给连进来的设备发 IP</div>
+      <div class="sx" id="s4x">两边设备能不能直接互相访问</div>
     </div>
   </div>
 </section>
@@ -261,10 +261,10 @@ td.name{font-family:inherit}
 
 <div class="card">
   <div class="mh">
-    <h2>设备与端口转发</h2>
-    <button class="tag" id="fwdToggle">转发设置</button>
+    <h2>已连接设备 <span id="cnt" style="color:var(--fg)"></span></h2>
+    <button class="tag" id="fwdToggle" hidden>转发设置</button>
   </div>
-  <div class="sub" id="fwdState" style="margin:0 0 2px">--</div>
+  <div class="sub" id="fwdState" hidden style="margin:0 0 2px">--</div>
   <div id="fwdPanel" hidden>
     <div class="row" style="margin:8px 0">
       <input type="text" id="fwdPort" placeholder="端口，例如 18765" inputmode="numeric" style="flex:1">
@@ -274,13 +274,10 @@ td.name{font-family:inherit}
     <div class="sub">目标设备 <b id="fwdTarget">--</b>（自动跟随，不需要手填）</div>
   </div>
 
-  <div style="margin-top:10px">
-    <h2 style="margin-bottom:6px">已连接设备 <span id="cnt" style="color:var(--fg)"></span></h2>
-    <table>
-      <thead><tr><th>IP</th><th>名称</th><th>MAC</th></tr></thead>
-      <tbody id="devs"><tr><td colspan="3" class="empty">暂无设备</td></tr></tbody>
-    </table>
-  </div>
+  <table>
+    <thead><tr><th>IP</th><th>名称</th><th>MAC</th></tr></thead>
+    <tbody id="devs"><tr><td colspan="3" class="empty">暂无设备</td></tr></tbody>
+  </table>
 </div>
 
 <div class="card">
@@ -453,20 +450,23 @@ function renderNet(s){
   $('#s3v').style.color = s.usb_net==='ok' ? 'var(--acc)' : (d3==='var(--bad)'?'var(--bad)':'var(--dim)');
   $('#s3x').textContent = x3;
 
-  // 4) 地址分配
-  let d4='#555', v4='没在用', x4='共享和热点都没开，没人需要地址';
-  if(s.sys_dhcp==1){
-    d4='var(--acc)'; v4='系统负责'; x4='USB 端的 IP 由系统 tethering 发，模块不插手（最稳）';
-  }else if(s.dnsmasq==1){
-    d4='var(--acc)'; v4='模块负责'; x4='模块自己的 DHCP 在发地址，网段 ' + s.gw + '/24';
-  }else if(s.usb==1){
-    d4='var(--warn)'; v4='没人发地址'; x4='USB 网卡在，但没看到 DHCP 服务，对端可能拿不到 IP';
-  }else if(s.ap==1){
-    v4='系统负责（热点）'; x4='热点设备的 IP 由系统热点自己发';
+  // 4) 热点 ↔ USB 互访（模块现在唯一负责的网络功能）
+  let d4='#555', v4='未打通', x4='热点和 USB 共享都开启后自动打通，不用设网段';
+  const bs = s.bridge || 'off';
+  if(bs==='on'){
+    d4='var(--acc)'; v4='已打通';
+    x4='热点 ' + (s.bridge_ap||'?') + ' ↔ USB ' + (s.bridge_usb||'?') + '，两边设备可以直接互访';
+  }else if(bs==='same'){
+    d4='var(--acc)'; v4='同一网段';
+    x4='两侧落在同一网段，本来就能直连，不需要桥接';
+  }else if(bs==='no_ap'){
+    v4='热点未开'; x4='开热点后自动打通';
+  }else if(bs==='no_usb'){
+    v4='USB 未共享'; x4='开启 USB 共享后自动打通';
   }
   $('#s4d').style.background = d4;
   $('#s4v').textContent = v4;
-  $('#s4v').style.color = d4==='var(--acc)' ? 'var(--acc)' : (d4==='var(--warn)'?'var(--warn)':'var(--dim)');
+  $('#s4v').style.color = d4==='var(--acc)' ? 'var(--acc)' : 'var(--dim)';
   $('#s4x').textContent = x4;
 }
 

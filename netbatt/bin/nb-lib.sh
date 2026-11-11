@@ -233,11 +233,24 @@ log_clear() {
 # 导出到用户随手能读的目录。WebView 壳没实现 DownloadListener，
 # Content-Disposition 附件会被静默吞掉，所以直接由 root 落盘到 /sdcard/Download，
 # 用户用文件管理器/相册都能找到。返回落盘路径，失败返回空。
+# 导出文件名：net-YYYYMMDD.log。同一天每点一次就新开一份，已存在就续 -2、-3，
+# 不再永远覆盖同一个 netbatt.log，导多了也能按时间对上。
+log_export_name() {
+  base="net-$(date '+%Y%m%d')"
+  n=1
+  name="$base.log"
+  while [ -e "$1/$name" ]; do
+    n=$((n + 1))
+    name="$base-$n.log"
+  done
+  echo "$name"
+}
+
 log_export() {
   dst=""
   for d in /sdcard/Download /sdcard/Documents /storage/emulated/0/Download /data/media/0/Download; do
     if [ -d "$d" ] || mkdir -p "$d" 2>/dev/null; then
-      dst="$d/netbatt.log"
+      dst="$d/$(log_export_name "$d")"
       break
     fi
   done
@@ -258,7 +271,8 @@ nb_build() {
 # 开机记一次环境快照：排障时第一眼看的就是这几行
 log_boot() {
   ver=$($BB sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
-  rel=$($BB getprop ro.build.version.release 2>/dev/null)
+  ver=${ver#v}
+  rel=$(getprop ro.build.version.release 2>/dev/null)
   plat=$(chg_platform 2>/dev/null)
   log "===== 启动 v${ver:-?} · Android $rel · 平台 ${plat:-?} ====="
   log "配置: 网段 $GW/24 池 .$POOL_START-.$POOL_END · USB类型 $USB_NET(生效 $(usb_net_pick)) · native=$USB_NATIVE · 日志上限 $LOG_MAX"
@@ -362,166 +376,30 @@ sync_dnsmasq() {
 }
 
 apply() {
-  # 先对齐 USB 网络功能类型，再配地址：类型切换会重建 gadget，地址得在后面配
+  # 只剩两件事：USB 功能类型对齐、热点↔USB 互访。地址与 DHCP 全归系统 tethering。
   usb_sync_func
-  A=$(ip -o -4 addr show)
+  # 老版本自建过 dnsmasq 的话清掉，别让它继续和系统抢 67
+  [ -f "$DATA/dnsmasq.pid" ] && stop_dnsmasq
   echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
 
-  # 系统共享没接管时自己补：共享网段走上级路由表 + NAT，客户端才能上网
-  UP=$(ip route get 114.114.114.114 2>/dev/null | $BB awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-  if [ -n "$UP" ]; then
-    ip rule show | $BB grep -q "from $PREFIX.0/24 lookup $UP" || \
-      ip rule add from "$PREFIX.0/24" lookup "$UP" pref 16000 2>/dev/null
-    iptables -t nat -C POSTROUTING -s "$PREFIX.0/24" -j MASQUERADE 2>/dev/null || \
-      iptables -t nat -A POSTROUTING -s "$PREFIX.0/24" -j MASQUERADE 2>/dev/null
-    # netd 的 tetherctrl_FORWARD 默认 DROP，非“已共享”接口会被拦掉
-    iptables -C FORWARD -s "$PREFIX.0/24" -j ACCEPT 2>/dev/null || \
-      iptables -I FORWARD -s "$PREFIX.0/24" -j ACCEPT 2>/dev/null
-    iptables -C FORWARD -d "$PREFIX.0/24" -j ACCEPT 2>/dev/null || \
-      iptables -I FORWARD -d "$PREFIX.0/24" -j ACCEPT 2>/dev/null
-  fi
-
-  # 清掉与上级网关冲突的 192.168.0.1/24
-  if echo "$A" | $BB awk '$2=="wlan0" && $4=="192.168.0.1/24"{f=1} END{exit !f}'; then
-    ip addr del 192.168.0.1/24 dev wlan0 2>/dev/null
-    A=$(ip -o -4 addr show)
-  fi
-
-  OLDGW=$($BB cat "$DATA/gw" 2>/dev/null)
-  # netd 只给它自己配过的网段加本地路由规则，改网段后必须自己补
-  ip rule show | $BB grep -q "to $PREFIX.0/24 lookup main" || \
-    ip rule add to "$PREFIX.0/24" lookup main prio 4000 2>/dev/null
   DS=$(downstream)
   for i in $($BB cat "$DATA/ifaces" 2>/dev/null); do
     ip link show "$i" >/dev/null 2>&1 && DS="$DS $i"
   done
   DS=$(echo $DS | $BB tr ' ' '\n' | $BB sort -u | $BB tr '\n' ' ' | $BB sed 's/^ *//;s/ *$//')
 
-  # 有下游时，wlan0 上的 192.168.2.1 只是残留
-  if [ -n "$DS" ]; then
-    for a in $(echo "$A" | $BB awk '$2=="wlan0" && ($4=="192.168.2.1/24"||$4=="192.168.42.1/24"){print $4}'); do
-      ip addr del "$a" dev wlan0 2>/dev/null
-      A=$(ip -o -4 addr show)
-    done
-  fi
-
-  # USB 共享端由模块接管地址；热点端用系统自己的网段，不碰
-  USBDS=""
-  for i in $DS; do
-    case "$i" in
-      rndis*|ncm*|usb[0-9]*)
-        # 用户手动关了共享就不再接管地址
-        if [ "$(usb_off_flag)" = 1 ]; then continue; fi
-        # 系统 tethering 已经接管这个接口时，地址与 DHCP 都归系统管。
-        # 实测 vivo 开 ncm,adb 后 system_server 立刻在 rndis0 上跑自己的 DHCP
-        # （网段 192.168.66.x），模块若同时把接口改成 192.168.8.1，
-        # 对端拿到 66.x 却连不上 8.1，等于把能用的链路改坏。
-        # v3.1.7：系统 dnsmasq 绑的是通配 0.0.0.0:67，sys_dhcp_on 按接口名
-        # grep 抓不到，导致漏判。这里只要系统 dnsmasq 在跑，就认定系统已接管，
-        # 只拉 UP 不配地址、不抢 DHCP。
-        if sys_dnsmasq_alive || sys_dhcp_on "$i"; then
-          ip link set "$i" up 2>/dev/null
-          USBDS="$USBDS $i"
-          continue
-        fi
-        for a in $(echo "$A" | $BB awk -v d="$i" -v g="$GW/24" '
-            $2==d && $4!=g && $4 !~ /^169\.254\./ {print $4}'); do
-          ip addr del "$a" dev "$i" 2>/dev/null
-          A=$(ip -o -4 addr show)
-        done
-        if ! echo "$A" | $BB awk -v d="$i" -v w="$GW/" 'index($4,w)==1 && $2==d{f=1} END{exit !f}'; then
-          ip addr add "$GW/24" dev "$i" 2>/dev/null
-          A=$(ip -o -4 addr show)
-        fi
-        # 只配地址不够：切换 sys.usb.config 后 rndis0/ncm0 可能停在 DOWN，
-        # 地址在但包发不出去，对端永远拿不到 DHCP 回应（实测 vivo rndis0 就是 DOWN）
-        ip link set "$i" up 2>/dev/null
-        USBDS="$USBDS $i"
-        ;;
-    esac
-  done
+  # 地址、DHCP 全归系统 tethering。模块只保证 USB 网卡是 UP：
+  # 网卡 DOWN 时系统 dnsmasq 也发不出地址（实测 vivo 切换后 rndis0 停在 DOWN）。
+  for i in $(usb_ifaces); do ip link set "$i" up 2>/dev/null; done
 
   [ -n "$DS" ] && echo "$DS" > "$DATA/ifaces"
-  echo "$GW" > "$DATA/gw"
   log_chg ifaces "$DS" "网络: 下游接口 ${DS:-无}"
-  log_chg gw "$GW/$POOL_START-$POOL_END" "网络: 网段 $GW/24 池 .$POOL_START-.$POOL_END · USB 接管 ${USBDS:-无}"
 
-  # 热点网段与 USB 网段互访：热点客户端要能直接访问 USB 那台设备的端口
-  HSIP=$(ip -o -4 addr show dev "$(ap_iface)" 2>/dev/null | $BB awk '{sub(/\/.*/,"",$4); print $4; exit}')
-  if [ -n "$HSIP" ]; then
-    HNET=$(echo "$HSIP" | $BB awk -F. '{print $1"."$2"."$3".0/24"}')
-    echo "$HNET" > "$DATA/hnet"
-    ip rule show | $BB grep -q "to $HNET lookup main" || \
-      ip rule add to "$HNET" lookup main pref 3500 2>/dev/null
-    for spec in "-s $HNET -d $PREFIX.0/24" "-s $PREFIX.0/24 -d $HNET"; do
-      iptables -C FORWARD $spec -j ACCEPT 2>/dev/null || \
-        iptables -I FORWARD $spec -j ACCEPT 2>/dev/null
-    done
-  fi
+  # 热点 ↔ USB 互访：本模块唯一负责的网络功能
+  bridge_sync
 
-  # 热点设备访问本机指定端口的流量，按页面里的列表转给 USB 端那台固定设备
-  sync_fwd
-
-  # 三种情况下模块不启 dnsmasq：
-  # 1) 热点开着 —— 系统热点自己绑 67，抢了就起不来
-  # 2) 系统 tethering 正在服务 USB 接口 —— 它已经给了地址，我们再去抢只会
-  #    每轮 bind 失败刷错误日志（实测 vivo：system_server 占 0.0.0.0%rndis0:67）
-  # 3) 没有下游接口
-  # 4) usb.mode=native：系统 tethering 建出了网卡，地址归系统发（v3.1.7 根因修复——
-  #    sys_dhcp_on 按接口名 grep 抓不到通配绑定的系统 dnsmasq，误判「没接管」去自建，
-  #    两个 dnsmasq 抢 67、stop_dnsmasq 误杀系统进程 → 热点崩溃）
-  if [ "$(ap_running)" = 1 ]; then
-    date +%s > "$DATA/yield.ts" 2>/dev/null
-    # 热点开着时顺带确认系统 DHCP 是否在热点接口上服务——没服务的话，
-    # 连上来的设备拿不到地址，就是「热点开着但没网」的直接原因。
-    if ap_dhcp_on; then
-      log_chg apdhcp "on" "热点: DHCP 由系统服务（接口 $(ap_iface)）"
-    else
-      log_chg apdhcp "off" "热点: 系统 DHCP 未在 $(ap_iface) 上服务，连入设备可能拿不到地址"
-    fi
-    stop_dnsmasq
-  elif [ "$($BB cat "$DATA/usb.mode" 2>/dev/null)" = native ]; then
-    # 系统 tethering 全权：模块只把 USB 网卡拉 UP（网卡 DOWN 时系统 dnsmasq 也发不出地址），
-    # 绝不碰 dnsmasq、不抢 67、不配地址。
-    for i in $USBDS; do ip link set "$i" up 2>/dev/null; done
-    log_chg dhcpw "sys" "DHCP: 系统 tethering 全权（usb.mode=native），模块让位"
-    date +%s > "$DATA/yield.ts" 2>/dev/null
-    stop_dnsmasq
-  elif sys_dnsmasq_alive; then
-    # 系统 tethering 的 dnsmasq 活着：地址由它发，模块让位，绝不抢。
-    for i in $USBDS; do ip link set "$i" up 2>/dev/null; done
-    log_chg dhcpw "sys" "DHCP: 系统 dnsmasq 在跑，模块让位（不碰 67）"
-    date +%s > "$DATA/yield.ts" 2>/dev/null
-    stop_dnsmasq
-  elif sys_dhcp_any "$USBDS"; then
-    # 系统 tethering 已接管：这是「有服务」而不是「端口被占所以判断失败」，记下来
-    log_chg dhcpw "sys" "DHCP: 由系统 tethering 负责（模块让位）"
-    date +%s > "$DATA/yield.ts" 2>/dev/null
-    stop_dnsmasq
-  else
-    # 让位迟滞：系统 tethering 建立的那几秒里 sys_dhcp_any 会时有时无，
-    # 若每次都立刻切回自建，dnsmasq 会在「让位/自建」之间高频起停，租约永远发不出去。
-    # 让位后至少保持 20 秒，确认系统真的没接管了才允许自建。
-    yt=$($BB cat "$DATA/yield.ts" 2>/dev/null); [ -z "$yt" ] && yt=0
-    if [ $(( $(date +%s) - yt )) -lt 20 ]; then
-      log_chg dhcpw "yield" "DHCP: 让位冷却中，暂不自建（等系统 tethering 稳定）"
-      : # 不碰 dnsmasq，保持现状
-    else
-      # USBDS 为空（没有 USB 下游接口）时不自建：sync_dnsmasq "" 会走 stop 分支，
-      # 反复触发 stop_dnsmasq 误杀系统 tethering 的 dnsmasq。没接口就什么都不做。
-      if [ -z "$USBDS" ]; then
-        log_chg dhcpw "none" "DHCP: 无 USB 下游接口，不自建"
-      else
-        log_chg dhcpw "self" "DHCP: 模块自建 dnsmasq 服务 $USBDS"
-        sync_dnsmasq "$USBDS"
-      fi
-    fi
-  fi
   ns=$(usb_net_state)
   log_chg usbnet "$ns" "USB 链路: $ns"
-  # 车机拿不到地址时，把 67 端口/系统 dnsmasq/USB 网卡状态原样记下来，定位「谁没在发」
-  dhcp_diag
-  usb_dhcp_tick
 }
 
 # ---------- 端口转发 ----------
@@ -573,6 +451,74 @@ usb_peer_net() {
 ap_net() {
   a=$(ap_iface) || return 1
   iface_net24 "$a"
+}
+
+# ---------- 热点 ↔ USB 互访 ----------
+# 系统 tethering 会给热点和 USB 各配一个随机 /24，两侧互不可达。这里只做三层转发 +
+# 双向 SNAT，网段每轮从接口实际地址推导，不写死、不固定 IP。
+# 为什么不是 L2 桥接：两个接口都在系统 tethering 手里、各自跑 DHCP，桥到一起两个
+# DHCP 会互相打架；三层转发已经能让两边设备直接互访，且不动系统的地址分配。
+BR_CHAIN=NETBATT_BRIDGE
+BR_KEY="$DATA/bridge.key"
+
+bridge_sync() {
+  aif=""; uif=""; anet=""; unet=""
+
+  [ "$(ap_running)" = 1 ] && aif=$(ap_iface)
+  for i in $(usb_ifaces); do
+    unet=$(iface_net24 "$i") && { uif="$i"; break; }
+  done
+  [ -n "$aif" ] && anet=$(iface_net24 "$aif")
+
+  state=off
+  if [ -z "$aif" ] && [ -z "$uif" ]; then state=off
+  elif [ -z "$aif" ]; then state=no_ap
+  elif [ -z "$uif" ]; then state=no_usb
+  elif [ "$anet" = "$unet" ]; then state=same
+  else state=on
+  fi
+
+  # 链和跳转建一次就够；被 netd 冲掉时这里会补回来
+  iptables -t nat -N "$BR_CHAIN" 2>/dev/null
+  iptables -t nat -C POSTROUTING -j "$BR_CHAIN" 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -j "$BR_CHAIN" 2>/dev/null
+
+  if [ "$state" != on ]; then
+    # 两侧没都起来就清空，别把旧网段的 SNAT 留在链里
+    iptables -t nat -F "$BR_CHAIN" 2>/dev/null
+    rm -f "$BR_KEY"
+    echo "$state" > "$DATA/bridge.state"
+    echo "" > "$DATA/bridge.ap"
+    echo "" > "$DATA/bridge.usb"
+    log_chg brst "$state" "桥接: ${state}（热点 ${aif:-无} · USB ${uif:-无}）"
+    return 0
+  fi
+
+  key="$anet $unet"
+  if [ "$($BB cat "$BR_KEY" 2>/dev/null)" != "$key" ]; then
+    iptables -t nat -F "$BR_CHAIN" 2>/dev/null
+    iptables -t nat -A "$BR_CHAIN" -s "$anet" -d "$unet" -j MASQUERADE 2>/dev/null
+    iptables -t nat -A "$BR_CHAIN" -s "$unet" -d "$anet" -j MASQUERADE 2>/dev/null
+    echo "$key" > "$BR_KEY"
+    log "桥接: 规则重建 热点 $anet → USB $unet，USB $unet → 热点 $anet"
+  fi
+
+  # Android 的策略路由只认 netd 自己配过的网段，目的地址改完后要能命中 main 表
+  for n in "$anet" "$unet"; do
+    ip rule show | $BB grep -q "to $n lookup main" || \
+      ip rule add to "$n" lookup main pref 3500 2>/dev/null
+  done
+
+  # netd 的 tetherctrl_FORWARD 默认 DROP，两个方向都得显式放行
+  for spec in "-s $anet -d $unet" "-s $unet -d $anet"; do
+    iptables -C FORWARD $spec -j ACCEPT 2>/dev/null || \
+      iptables -I FORWARD $spec -j ACCEPT 2>/dev/null
+  done
+
+  echo on > "$DATA/bridge.state"
+  echo "$anet" > "$DATA/bridge.ap"
+  echo "$unet" > "$DATA/bridge.usb"
+  log_chg br "$key" "桥接: 已打通 热点 $anet ↔ USB $unet（转发 + 双向 NAT）"
 }
 
 fwd_list() {
@@ -641,6 +587,20 @@ sync_fwd() {
     done
   fi
   echo "$tg" > "$DATA/fwd.target"
+}
+
+# v3.1.12 起端口转发停用：三层互访打通后热点侧本来就能访问 USB 侧所有端口。
+# 升级时把上一版留下的链和跳转清掉，避免旧 DNAT 规则继续抢流量。
+fwd_cleanup() {
+  for i in $(ap_iface) $AP_IFACES; do
+    while iptables -t nat -D PREROUTING -i "$i" -j NETBATT_FWD 2>/dev/null; do :; done
+  done
+  while iptables -t nat -D POSTROUTING -j NETBATT_SNAT 2>/dev/null; do :; done
+  iptables -t nat -F NETBATT_FWD 2>/dev/null
+  iptables -t nat -X NETBATT_FWD 2>/dev/null
+  iptables -t nat -F NETBATT_SNAT 2>/dev/null
+  iptables -t nat -X NETBATT_SNAT 2>/dev/null
+  rm -f "$DATA/fwd.list" "$DATA/fwd.target"
 }
 
 # 转发到底有没有在跑：页面用它给一句话结论，免得只看到「已开启」却不通
@@ -961,7 +921,9 @@ ap_down() { ap_is_up && return 1; return 0; }
 # 服务、模块却跑去自建，dnsmasq bind 失败刷「Address already in use」。
 sys_dhcp_on() {
   [ -n "$1" ] || return 1
-  ss -lunp 2>/dev/null | $BB grep -F "$1" | $BB grep -qE ':67\b.*(system_server|dnsmasq)'
+  # 不能用 \b：magisk busybox 的 grep 直接报 bad regex（trailing backslash）退出 2，
+  # 判定永远为假；系统 toybox grep 也不认 \b（返回 1）。用 [[:space:]] 收尾才可移植。
+  ss -lunp 2>/dev/null | $BB grep -F "$1" | $BB grep -qE ':67[[:space:]].*(system_server|dnsmasq)'
 }
 
 # 系统 tethering 的 dnsmasq 是否在跑（不看接口名）。
@@ -988,7 +950,7 @@ sys_dnsmasq_alive() {
 # 系统热点 DHCP 的持有者同样是 system_server 或 dnsmasq 两种之一。
 ap_dhcp_on() {
   a=$(ap_iface) || return 1
-  ss -lunp 2>/dev/null | $BB grep -F "$a" | $BB grep -qE ':67\b.*(system_server|dnsmasq)'
+  ss -lunp 2>/dev/null | $BB grep -F "$a" | $BB grep -qE ':67[[:space:]].*(system_server|dnsmasq)'
 }
 
 # 诊断：67 端口到底谁在监听。车机拿不到 IP 时，先分清「系统没在服务」还是「服务了但没发出去」。
@@ -996,7 +958,7 @@ ap_dhcp_on() {
 dhcp_diag() {
   local snap key
   # 关键原始证据：udp 67 的监听者 + 系统 dnsmasq 进程 + 当前 USB 复合配置
-  snap=$(ss -lunp 2>/dev/null | $BB grep -E ':67\b' | $BB sed 's/^ *//;s/  */ /g' | $BB head -5)
+  snap=$(ss -lunp 2>/dev/null | $BB grep -E ':67[[:space:]]' | $BB sed 's/^ *//;s/  */ /g' | $BB head -5)
   key=$(echo "$snap" | $BB md5sum 2>/dev/null | $BB cut -c1-8)
   [ -z "$key" ] && key=$(echo "$snap" | $BB cksum 2>/dev/null | $BB awk '{print $1}')
   [ -z "$key" ] && key="na"
@@ -1751,6 +1713,9 @@ status_json() {
 "adb_tcp":$(adb_tcp_code),"adb_port":"$(getprop service.adb.tcp.port)","adb_boot":$ADB_BOOT,"adb_persist":"$(getprop persist.adb.tcp.port)",
 "dhcp":"$($BB cat "$DATA/dhcp.state" 2>/dev/null || echo idle)",
 "dhcp_last":"$($BB cat "$DHCP_LAST" 2>/dev/null)",
+"bridge":"$($BB cat "$DATA/bridge.state" 2>/dev/null || echo off)",
+"bridge_ap":"$($BB cat "$DATA/bridge.ap" 2>/dev/null)",
+"bridge_usb":"$($BB cat "$DATA/bridge.usb" 2>/dev/null)",
 "usb_net":"$(usb_net_state)","uplink":"$(uplink_state)",
 "sys_dhcp":$(sys_dhcp_any && echo 1 || echo 0),
 "log_size":$(log_size "$LOG"),"log_old":$(log_size "$LOG1"),"log_max":${LOG_MAX:-3145728},

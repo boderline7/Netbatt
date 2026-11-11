@@ -11,7 +11,7 @@ a=$(get a)
 # 日志走纯文本，其余接口回 JSON。full=1 时带附件头，车机上可以直接整份拷走。
 if [ "$a" = log ]; then
   printf 'Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n'
-  [ "$(get full)" = 1 ] && printf 'Content-Disposition: attachment; filename="netbatt.log"\r\n'
+  [ "$(get full)" = 1 ] && printf 'Content-Disposition: attachment; filename="net-%s.log"\r\n' "$(date '+%Y%m%d')"
   printf '\r\n'
 else
   printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'

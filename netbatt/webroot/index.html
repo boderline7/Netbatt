@@ -139,6 +139,7 @@ td.name{font-family:inherit}
   <div class="hint"><span id="chgdot" class="dot" style="background:#555"></span><span id="chgtxt">控制器状态未知</span>
     · <span id="temp">--</span>℃</div>
   <div class="hint" style="margin-top:4px"><span id="powdot" class="dot" style="background:#555"></span><span id="powtxt">--</span></div>
+  <div class="hint" style="margin-top:4px" id="chgch">充电通道：--</div>
 </div>
 
 <div class="card" style="padding:12px 16px">
@@ -215,9 +216,22 @@ function render(s){
   $('#chgtxt').textContent = b.enabled ? '控制器运行中' + (b.state==='off'?'（当前暂停充电）':'（当前充电中）') : '控制器已停止';
   $('#chgStart').classList.toggle('active', !!b.enabled);
   $('#chgStop').classList.toggle('active', !b.enabled);
+  $('#chgch').textContent = chgDesc(b);
   $('#web').textContent = s.web;
   $('#fwdTarget').textContent = s.target || '--';
   renderFwd(s.fwd);
+}
+
+// 充电通道说明：骁龙走开关节点，天玑(vivo)走目标电量节点
+function chgDesc(b){
+  if(!b.ch || b.ch==='none') return '充电通道：未找到可控节点';
+  const plat = {qcom:'骁龙', mtk:'天玑'}[b.plat] || '其他平台';
+  const node = (b.node||'').split('/').filter(Boolean).pop() || '--';
+  if(b.ch==='soc'){
+    const o = b.soc_orig ? `（接管前 ${b.soc_orig}）` : '';
+    return `充电通道：${plat} · 目标电量型 ${node}=${b.sw}${o}`;
+  }
+  return `充电通道：${plat} · 开关型 ${node}=${b.sw}`;
 }
 
 // 端口转发列表：热点设备访问本机这些端口 -> USB 端固定设备

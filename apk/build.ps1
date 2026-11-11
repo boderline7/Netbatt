@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
-$root = "C:\Users\TI\Documents\Trae-CN\temp_20261110_01"
+# 构建根目录：优先取环境变量 NETBATT_BUILD_ROOT，未设置时用原作者机器的路径
+$root = if ($env:NETBATT_BUILD_ROOT) { $env:NETBATT_BUILD_ROOT } else { "C:\Users\TI\Documents\Trae-CN\temp_20261110_01" }
 $BT   = "$root\sdk\bt\android-14"
 $JAR  = "$root\sdk\plat\android-34\android.jar"
 $SRC  = "$root\apk"

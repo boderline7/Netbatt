@@ -8,3 +8,4 @@ apk/build/*.idsig
 
 *.log
 *.tmp
+*.zip

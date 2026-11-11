@@ -20,9 +20,15 @@ DNS2=119.29.29.29
 PAUSE_CAP=88
 RESUME_CAP=83
 MAX_TEMP=45
+# 充电通道：auto 按机型自动选；switch 用开关节点，soc 用目标电量节点
+CHG_MODE=auto
 CHG_SWITCH=/sys/class/qcom-battery/input_suspend
 CHG_ON=0
 CHG_OFF=1
+# soc 通道（vivo/MTK）：写入目标电量，充到该值即停
+SOC_PATH=/sys/class/power_supply/battery/keep_chg_soc
+CHG_SOC_OFF=5
+CHG_SOC_ON=100
 KEEP_WIFI=0
 KEEP_USB=0
 # 热点设备访问本机这个端口时，转发给 USB 端那台固定设备
@@ -38,12 +44,26 @@ DNS2=$DNS2
 PAUSE_CAP=$PAUSE_CAP
 RESUME_CAP=$RESUME_CAP
 MAX_TEMP=$MAX_TEMP
+CHG_MODE=$CHG_MODE
 CHG_SWITCH=$CHG_SWITCH
 CHG_ON=$CHG_ON
 CHG_OFF=$CHG_OFF
+SOC_PATH=$SOC_PATH
+CHG_SOC_OFF=$CHG_SOC_OFF
+CHG_SOC_ON=$CHG_SOC_ON
 KEEP_WIFI=$KEEP_WIFI
 KEEP_USB=$KEEP_USB
 FWDPORT=$FWDPORT
+EOC
+fi
+
+# 老配置文件缺新键时补默认值，避免升级后行为变化
+if ! $BB grep -q '^CHG_MODE=' "$CFG" 2>/dev/null; then
+  cat >> "$CFG" <<EOC
+CHG_MODE=auto
+SOC_PATH=/sys/class/power_supply/battery/keep_chg_soc
+CHG_SOC_OFF=5
+CHG_SOC_ON=100
 EOC
 fi
 
@@ -302,8 +322,90 @@ chg_init() {
   [ -f "$DATA/chg.on" ] || [ -f "$DATA/chg.off" ] || touch "$DATA/chg.on"
 }
 
+# root 下 [ -w ] 恒真，只能看权限位；权限位取不到时退化成“写回原值”探测
+chg_writable() {
+  [ -f "$1" ] || return 1
+  p=$(stat -c %A "$1" 2>/dev/null)
+  case "$p" in
+    *w*) return 0 ;;
+    "")  ;;
+    *)   return 1 ;;
+  esac
+  v=$(cat "$1" 2>/dev/null) || return 1
+  printf '%s\n' "$v" > "$1" 2>/dev/null || return 1
+  return 0
+}
+
+# 判通道：CHG_CH=switch|soc|none，CHG_NODE=实际节点；switch 时一并定好 on/off 极性
+chg_detect() {
+  case "$CHG_MODE" in
+    switch) CHG_CH=switch; CHG_NODE=$CHG_SWITCH; return 0 ;;
+    soc)    CHG_CH=soc;    CHG_NODE=$SOC_PATH;   return 0 ;;
+  esac
+
+  # 有目标电量节点就先走 soc：这类机型通常不给开关节点写权限
+  if chg_writable "$SOC_PATH"; then
+    CHG_CH=soc; CHG_NODE=$SOC_PATH; return 0
+  fi
+
+  for spec in \
+    "/sys/class/qcom-battery/input_suspend:0:1" \
+    "/sys/class/power_supply/battery/input_suspend:0:1" \
+    "/sys/class/power_supply/charger/charging_enabled:1:0" \
+    "/sys/class/power_supply/battery/charging_enabled:1:0" \
+    "/sys/class/power_supply/battery/batt_slate_mode:0:1" \
+    "$CHG_SWITCH:$CHG_ON:$CHG_OFF"
+  do
+    p=${spec%%:*}; r=${spec#*:}; on=${r%%:*}; off=${r#*:}
+    chg_writable "$p" || continue
+    CHG_CH=switch; CHG_NODE=$p; CHG_ON=$on; CHG_OFF=$off
+    return 0
+  done
+
+  CHG_CH=none; CHG_NODE=""
+  return 1
+}
+
+chg_platform() {
+  b=$(getprop ro.board.platform 2>/dev/null)
+  case "$b" in
+    msm*|sdm*|sm[0-9]*|kona*|lahaina*|waipio*|taro*|blair*|sun*|cape*) echo qcom ;;
+    mt[0-9]*|mtk*) echo mtk ;;
+    *) [ -n "$b" ] && echo other || echo unknown ;;
+  esac
+}
+
+# chg_apply on|off|restore —— 唯一碰硬件的地方
+#   on/off  : 控制器自己决定
+#   restore : 控制器停用，把 soc 通道还原成接管前的值（vivo 出厂充电保护之类）
+chg_apply() {
+  chg_detect || return 1
+
+  if [ "$CHG_CH" = soc ]; then
+    # 第一次接管时记住原值，停用控制器时还原
+    [ -f "$DATA/soc.orig" ] || cat "$CHG_NODE" 2>/dev/null > "$DATA/soc.orig"
+    case "$1" in
+      off) v=$CHG_SOC_OFF ;;
+      restore)
+        v=$(cat "$DATA/soc.orig" 2>/dev/null)
+        [ -z "$v" ] && v=$CHG_SOC_ON ;;
+      *) v=$CHG_SOC_ON ;;
+    esac
+  else
+    case "$1" in off) v=$CHG_OFF ;; *) v=$CHG_ON ;; esac
+  fi
+
+  [ "$(cat "$CHG_NODE" 2>/dev/null)" = "$v" ] && return 0
+  printf '%s\n' "$v" > "$CHG_NODE" 2>/dev/null
+}
+
 chg_once() {
-  [ -f "$DATA/chg.on" ] || return 0
+  # 控制器没开：还原到接管前的状态，不做阈值判断
+  if [ ! -f "$DATA/chg.on" ]; then
+    chg_apply restore >/dev/null 2>&1
+    return 0
+  fi
+
   cap=$(cat $BATT/capacity 2>/dev/null); [ -z "$cap" ] && return 0
   rawt=$(cat $BATT/temp 2>/dev/null); [ -z "$rawt" ] && rawt=0
   t=$((rawt / 10))
@@ -321,9 +423,7 @@ chg_once() {
     [ -z "$want" ] && want=on
   fi
 
-  if [ "$want" = off ]; then val=$CHG_OFF; else val=$CHG_ON; fi
-  cur=$(cat "$CHG_SWITCH" 2>/dev/null)
-  [ "$cur" != "$val" ] && echo "$val" > "$CHG_SWITCH" 2>/dev/null
+  chg_apply "$want"
   echo "$want" > "$DATA/chg.state"
 }
 
@@ -337,12 +437,12 @@ chg_ctl() {
     stop)
       rm -f "$DATA/chg.on"
       touch "$DATA/chg.off"
-      echo "$CHG_ON" > "$CHG_SWITCH" 2>/dev/null
+      chg_apply restore
       echo on > "$DATA/chg.state"
       ;;
     restart)
       rm -f "$DATA/chg.on" "$DATA/chg.off"
-      echo "$CHG_ON" > "$CHG_SWITCH" 2>/dev/null
+      chg_apply restore
       sleep 1
       touch "$DATA/chg.on"
       chg_once
@@ -358,6 +458,11 @@ batt_json() {
   rawt=$(cat $BATT/temp 2>/dev/null); [ -z "$rawt" ] && rawt=0
   temp=$($BB awk -v t="$rawt" 'BEGIN{printf "%.1f", t/10}')
   cur=$(cat $BATT/current_now 2>/dev/null); [ -z "$cur" ] && cur=0
+  # 符号各平台不一致（vivo/MTK 充电时给负值），统一成 正=充入 负=放出
+  case "$st" in
+    Charging)    [ "$cur" -lt 0 ] && cur=$((cur * -1)) ;;
+    Discharging) [ "$cur" -gt 0 ] && cur=$((cur * -1)) ;;
+  esac
   ma=$($BB awk -v c="$cur" 'BEGIN{printf "%d", c/1000}')
   # 电流有符号：正=充入，负=放出；功率 = 电压 × 电流
   vol=$(cat $BATT/voltage_now 2>/dev/null); [ -z "$vol" ] && vol=3800000
@@ -375,10 +480,16 @@ batt_json() {
       ;;
   esac
   umax=$(cat /sys/class/power_supply/usb/current_max 2>/dev/null); [ -z "$umax" ] && umax=0
-  sw=$(cat "$CHG_SWITCH" 2>/dev/null); [ -z "$sw" ] && sw="?"
-  printf '{"cap":%s,"status":"%s","temp":%s,"ma":%s,"a":%s,"w":%s,"dir":"%s","usb_max":%s,"pc":%s,"rc":%s,"enabled":%s,"sw":"%s","state":"%s"}' \
+  # 当前走哪条通道、落在哪个节点、平台是什么，前端要显示出来
+  chg_detect >/dev/null 2>&1
+  [ -z "$CHG_NODE" ] && CHG_NODE=$CHG_SWITCH
+  sw=$(cat "$CHG_NODE" 2>/dev/null); [ -z "$sw" ] && sw="?"
+  socv=$(cat "$DATA/soc.orig" 2>/dev/null)
+  [ -z "$socv" ] && socv=$(cat "$CHG_NODE" 2>/dev/null)
+  [ -z "$socv" ] && socv=0
+  printf '{"cap":%s,"status":"%s","temp":%s,"ma":%s,"a":%s,"w":%s,"dir":"%s","usb_max":%s,"pc":%s,"rc":%s,"enabled":%s,"sw":"%s","state":"%s","ch":"%s","node":"%s","plat":"%s","soc_orig":%s}' \
     "$cap" "$st" "$temp" "$ma" "$amp" "$watt" "$dir" "$umax" "$PAUSE_CAP" "$RESUME_CAP" "$(chg_active)" "$sw" \
-    "$(cat $DATA/chg.state 2>/dev/null || echo on)"
+    "$(cat $DATA/chg.state 2>/dev/null || echo on)" "$CHG_CH" "$CHG_NODE" "$(chg_platform)" "$socv"
 }
 
 # ---------- 状态 / 控制 ----------

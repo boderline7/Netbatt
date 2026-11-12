@@ -18,13 +18,23 @@ if [ "$(cat "$MARK" 2>/dev/null)" != "$VC" ]; then
   echo "$VC" > "$MARK"
 fi
 
+# 等系统把 USB / 电源节点都枚举完再开始判断，否则开机瞬间会被判成「断电」
 sleep 8
-# 上一轮手动关闭留下的暂停标记只对当次开机有效：开机重来，自启开关说了算
-rm -f /data/adb/netbatt/wifi.off /data/adb/netbatt/usb.off /data/adb/netbatt/adb.off 2>/dev/null
-sh "$MODDIR/bin/netbatt.sh" init >/dev/null 2>&1
-# adb 恢复要等 adbd 真起来，最多 40 秒，放后台别挡网页服务
-$BB setsid sh -c '. /data/adb/modules/netbatt/bin/nb-lib.sh; adb_tcp_restore' >/dev/null 2>&1 &
-# 开机自启：只按 BOOT_WIFI / BOOT_USB 拉一次，和「保活」无关
-$BB setsid sh -c '. /data/adb/modules/netbatt/bin/nb-lib.sh; boot_autostart' >/dev/null 2>&1 &
-sh "$MODDIR/bin/netbatt.sh" web
-$BB setsid sh "$MODDIR/bin/loop.sh" >/dev/null 2>&1 &
+
+chmod 755 "$MODDIR/bin"/*.sh 2>/dev/null
+
+# 旧版守护进程如果还活着（从 v3 升级上来），先收掉
+pkill -f "netbatt/bin/loop.sh" 2>/dev/null
+pkill -f "netbatt/bin/netbatt.sh" 2>/dev/null
+pkill -f "netbatt/bin/nb-daemon.sh" 2>/dev/null
+sleep 1
+
+# 无线 ADB 恢复要等 adbd 真起来，放后台别挡网页服务
+# busybox 个别裁剪版本没有 setsid，退化成普通后台运行
+if $BB setsid true >/dev/null 2>&1; then
+  $BB setsid sh "$MODDIR/bin/nb-daemon.sh" adb-restore >/dev/null 2>&1 &
+  $BB setsid sh "$MODDIR/bin/nb-daemon.sh" >/dev/null 2>&1 &
+else
+  sh "$MODDIR/bin/nb-daemon.sh" adb-restore >/dev/null 2>&1 &
+  sh "$MODDIR/bin/nb-daemon.sh" >/dev/null 2>&1 &
+fi

@@ -13,878 +13,289 @@
   --acc:#3ddc84; --warn:#f5a524; --bad:#f0506e; --blue:#4c8dff;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-:focus{outline:none}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:15px/1.5 -apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
   padding:14px 12px 36px;max-width:640px;margin:0 auto}
+header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px}
 h1{font-size:17px;margin:0}
-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.iconbtn{padding:6px 12px;font-size:13.5px;line-height:1.25;border-radius:18px;background:#1b222b;
-  border:1px solid var(--line);color:var(--dim)}
-.iconbtn:active{color:var(--fg)}
-/* 地址条：接 USB 的对端用哪个、连热点的设备用哪个。127.0.0.1 是手机自己，不显示 */
-.addrbar{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
-.addr{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
-.addr .alab{display:block;font-size:11.5px;color:var(--dim);margin-bottom:3px}
-.addr b{display:block;font:600 13px/1.35 ui-monospace,Consolas,monospace;word-break:break-all;
-  -webkit-user-select:all;user-select:all}
-.addr.on{border-color:#2b5b3f;background:#141e19}
-.addr.on b{color:var(--acc)}
-.addr.off b{color:#5b6779}
-.addr .aunit{font-size:11px;color:var(--dim);font-weight:400}
+.ver{font-size:12px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
-.card h2{font-size:12.5px;color:var(--dim);font-weight:600;letter-spacing:.04em;margin:0;
-  text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row{display:flex;align-items:center}
-.row > * + *{margin-left:10px}
-input[type=text]{width:100%;background:#0e1216;border:1px solid var(--line);color:var(--fg);
-  border-radius:9px;padding:9px 12px;font-size:15px;font-family:ui-monospace,Consolas,monospace}
-input[type=text]:focus{outline:none;border-color:var(--blue)}
+.card h2{font-size:12.5px;color:var(--dim);font-weight:600;letter-spacing:.04em;margin:0 0 12px;
+  text-transform:uppercase}
 button{background:#222b36;color:var(--fg);border:1px solid #2f3946;border-radius:9px;
   padding:9px 13px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit;
-  -webkit-appearance:none;appearance:none;outline:none;
-  transition:background .15s,border-color .15s,transform .1s,color .15s;
-  -webkit-user-select:none;user-select:none}
-/* WebView 会在按住/聚焦时画一圈方框，很难看，全部关掉，改用背景和缩放做反馈 */
-button:focus,button:focus-visible,button:active{outline:none}
-button:active{transform:scale(.96);background:#2b3542;border-color:#3b4757}
-button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
-button.ghost{background:transparent}
-button.danger{color:var(--bad)}
+  -webkit-appearance:none;appearance:none;transition:background .15s,border-color .15s,transform .1s}
+button:focus,button:active{outline:none}
+button:active{transform:scale(.96);background:#2b3542}
 button.on{background:#14301f;border-color:var(--acc);color:var(--acc)}
 button.active{background:var(--acc);border-color:var(--acc);color:#0b1a12;font-weight:600}
-button:disabled{opacity:.34;cursor:default}
-button:disabled:active{transform:none;background:#222b36;border-color:#2f3946}
-/* 两张开关卡并排：内容压到最短，细节交给下面的链路条 */
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
-.grid2 > .card{margin:0}
-.mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-.tag{font-size:11.5px;padding:5px 9px;border-radius:20px;background:#1e2733;border:1px solid #303b4a;
-  color:#c3cede;font-weight:500;display:inline-flex;align-items:center;line-height:1.1;
-  white-space:nowrap;flex:0 0 auto}
-/* 状态圆点：灰=关，绿=开，一眼能看出这是可点的开关 */
-.tag::before{content:"";width:6px;height:6px;border-radius:50%;background:#5b6779;
-  margin-right:6px;flex:0 0 auto}
-.tag.on{background:#14301f;border-color:#2f6b47;color:var(--acc)}
-.tag.on::before{background:var(--acc);box-shadow:0 0 6px #3ddc8488}
-.tag:active{transform:scale(.95)}
-.big{font-size:19px;font-weight:600;margin-bottom:10px}
-.btns2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.btns2 button{padding:8px 6px;font-size:13.5px}
-.btns3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
-.btns3 button{padding:8px 4px;font-size:13px}
-.sub{font-size:12.5px;color:var(--dim);margin-top:6px;word-break:break-all}
-.sub b{color:var(--fg);font-family:ui-monospace,Consolas,monospace;font-weight:600;white-space:nowrap}
-.warnrow{display:flex;align-items:center;justify-content:space-between;
-  font-size:12px;color:var(--warn);margin-top:8px;padding:6px 9px;border-radius:8px;
-  background:#2a2114;border:1px solid #4a3a15}
-/* 网络状态：一行一件事，说人话，不用缩写和术语 */
-.stat{display:flex;align-items:flex-start;padding:9px 0;border-bottom:1px dashed #1e252e}
-.stat:last-of-type{border:0;padding-bottom:2px}
-.stat .sd{width:8px;height:8px;border-radius:50%;background:#555;margin:7px 10px 0 0;flex:0 0 auto}
-.stat .sm{flex:1;min-width:0}
-.stat .sl{font-size:11.5px;color:var(--dim);line-height:1.3}
-.stat .sv{font-size:14.5px;font-weight:600;line-height:1.35;margin-top:1px}
-.stat .sx{font-size:12px;color:var(--dim);line-height:1.4;margin-top:2px;word-break:break-all}
-.q4{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.q4 button{padding:8px 4px;font-size:13px}
-.kv{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;
-  border-bottom:1px dashed #1e252e}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.34}
+input{background:#0e1216;border:1px solid var(--line);color:var(--fg);border-radius:9px;
+  padding:9px 12px;font-size:15px;font-family:ui-monospace,Consolas,monospace;width:100%}
+input:focus{outline:none;border-color:var(--blue)}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;text-align:center}
+.stat .l{font-size:11.5px;color:var(--dim);margin-bottom:3px}
+.stat .v{font-size:15px;font-weight:600}
+.stat .v.ok{color:var(--acc)}
+.stat .v.off{color:#5b6779}
+.stat .v.warn{color:var(--warn)}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.row + .row{margin-top:10px}
+.row .grow{flex:1;min-width:0}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.seg3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.seg button,.seg3 button{padding:9px 4px;font-size:13.5px}
+.hint{font-size:12.5px;color:var(--dim);margin-top:10px;line-height:1.5}
+.hint b{color:var(--fg)}
+.batt{display:flex;align-items:baseline;margin-bottom:4px}
+.batt b{font-size:38px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.batt .u{color:var(--dim);font-size:15px;margin-left:8px}
+.batt .st{margin-left:auto;color:var(--dim);font-size:13.5px}
+.kv{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;border-bottom:1px dashed #1e252e}
 .kv:last-of-type{border:0}
 .kv span{color:var(--dim)}
 .kv b{font-family:ui-monospace,Consolas,monospace;font-weight:600}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;color:var(--dim);font-weight:500;font-size:11.5px;padding:6px 3px;border-bottom:1px solid var(--line)}
-td{padding:8px 3px;border-bottom:1px solid #1b2129;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
-td.name{font-family:inherit}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--acc);margin-right:5px}
-.empty{color:var(--dim);font-size:13px;padding:12px 0;text-align:center}
-.batt{display:flex;align-items:baseline;margin-bottom:8px}
-.batt b{font-size:38px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums}
-/* 间距用 margin 给死：部分 WebView 对 flex 的 gap 支持不全，用 gap 会贴在一起 */
-.batt .unit{color:var(--dim);font-size:15px;margin-left:14px;flex:0 0 auto}
-.batt #bstat{margin-left:auto;color:var(--dim);font-size:13.5px;white-space:nowrap;padding-left:10px}
-.slabel{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--dim);margin-top:8px}
-.slabel b{font-size:14.5px;color:var(--fg);font-family:ui-monospace,Consolas,monospace}
-.slider{position:relative;height:34px;display:flex;align-items:center}
-/* 轨道左右各内缩滑块半径，使填充末端与滑块中心始终对齐 */
-.slider .track{position:absolute;left:12px;right:12px;height:8px;border-radius:4px;background:#2a323c}
-.slider .fill{height:100%;border-radius:4px;width:50%;background:var(--acc)}
-.slider.blue .fill{background:var(--blue)}
-.slider input[type=range]{position:relative;z-index:1;width:100%;height:34px;margin:0;
-  -webkit-appearance:none;background:transparent}
-.slider input[type=range]::-webkit-slider-runnable-track{height:34px;background:transparent}
-.slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;
-  border-radius:50%;background:#fff;border:4px solid var(--acc);margin-top:6px;
-  box-shadow:0 1px 6px #0006}
-.slider.blue input[type=range]::-webkit-slider-thumb{border-color:var(--blue)}
-.slider input[type=range]:disabled::-webkit-slider-thumb{background:#8b98a8;border-color:#4a5563;box-shadow:none}
-.slider.locked .fill{opacity:.45}
-.hint{font-size:12.5px;color:var(--dim);margin-top:8px}
-.hint .dot{margin-right:5px}
-.logbox{background:#0b0e12;border:1px solid var(--line);border-radius:9px;padding:10px 11px;margin:0 0 10px;
+.logbox{background:#0b0e12;border:1px solid var(--line);border-radius:9px;padding:10px 11px;margin:10px 0 0;
   font:12px/1.55 ui-monospace,Consolas,"Noto Sans Mono",monospace;color:#c8d3df;
-  max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;-webkit-overflow-scrolling:touch}
+  max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all}
 #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
   background:#2b3440;color:#fff;padding:10px 18px;border-radius:22px;font-size:13.5px;
   opacity:0;transition:.25s;pointer-events:none;z-index:9;box-shadow:0 8px 24px #000a}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+footer{text-align:center;font-size:12px;color:var(--dim);padding-top:6px;word-break:break-all}
 </style>
 </head>
 <body>
 <header>
   <h1>NetBatt 控制台</h1>
+  <span class="ver" id="ver">v-</span>
 </header>
 
-<div class="addrbar">
-  <div class="addr off" id="addrUsb">
-    <span class="alab">USB 共享 · 对端访问</span>
-    <b id="aUsb">未开启</b>
-  </div>
-  <div class="addr off" id="addrAp">
-    <span class="alab">Wi-Fi 热点 · 设备访问</span>
-    <b id="aAp">未开启</b>
-  </div>
-  <div class="addr off" id="addrFix" style="grid-column:1/-1">
-    <span class="alab">固定入口 · 热点和 USB 都能用（不变）</span>
-    <b id="aFix">未开启</b>
-  </div>
-</div>
-
-<div class="grid2">
-  <section class="card">
-    <div class="mh"><h2>热点</h2></div>
-    <div class="big" id="apState">--</div>
-    <div class="sub" id="apHint" style="display:none"></div>
-    <div class="btns2" style="margin-top:10px">
-      <button id="apOn">开启</button>
-      <button id="apOff">关闭</button>
-    </div>
-    <div class="btns2" style="margin-top:8px">
-      <button class="tag" id="apKeep" style="justify-content:center">保活</button>
-      <button class="tag" id="apBoot" style="justify-content:center">开机自启</button>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="mh"><h2>USB 网桥</h2></div>
-    <div class="big" id="usbState">--</div>
-    <div class="sub" id="usbHint" style="display:none"></div>
-    <div class="btns2" style="margin-top:10px">
-      <button id="usbOn">开启</button>
-      <button id="usbOff">关闭</button>
-    </div>
-    <div class="btns2" style="margin-top:8px">
-      <button class="tag" id="usbKeep" style="justify-content:center">保活</button>
-      <button class="tag" id="usbBoot" style="justify-content:center">开机自启</button>
-    </div>
-  </section>
+<div class="grid3" style="margin-bottom:12px">
+  <div class="stat"><div class="l">热点</div><div class="v off" id="s-ap">—</div></div>
+  <div class="stat"><div class="l">供电</div><div class="v off" id="s-car">—</div></div>
+  <div class="stat"><div class="l">已连设备</div><div class="v" id="s-cli">—</div></div>
 </div>
 
 <section class="card">
-  <div class="mh"><h2>网络状态</h2><button class="tag" id="netRefresh">刷新</button></div>
-  <div class="stat">
-    <span class="sd" id="s1d"></span>
-    <div class="sm">
-      <div class="sl">手机网络</div>
-      <div class="sv" id="s1v">检测中</div>
-      <div class="sx" id="s1x">看手机自己能不能上外网</div>
-    </div>
+  <h2>热点模式</h2>
+  <div class="row seg3">
+    <button id="b-mode-auto" onclick="setMode('auto')">自动</button>
+    <button id="b-mode-on" onclick="setMode('on')">常开</button>
+    <button id="b-mode-off" onclick="setMode('off')">关闭</button>
   </div>
-  <div class="stat">
-    <span class="sd" id="s2d"></span>
-    <div class="sm">
-      <div class="sl">连进来的设备</div>
-      <div class="sv" id="s2v">--</div>
-      <div class="sx" id="s2x">热点和 USB 两侧各有多少台</div>
-    </div>
+  <div class="row seg" style="margin-top:10px">
+    <button id="b-hs-on" onclick="setHs(1)">立即开热点</button>
+    <button id="b-hs-off" class="danger" onclick="setHs(0)">立即关热点</button>
   </div>
-  <div class="stat">
-    <span class="sd" id="s3d"></span>
-    <div class="sm">
-      <div class="sl">USB 连接</div>
-      <div class="sv" id="s3v">--</div>
-      <div class="sx" id="s3x"></div>
-    </div>
+  <div class="hint" id="h-auto"></div>
+</section>
+
+<section class="card">
+  <h2>电量 / 充电阈值</h2>
+  <div class="batt"><b id="b-cap">--</b><span class="u">%</span><span class="st" id="b-st"></span></div>
+  <div class="row seg" style="margin-top:6px">
+    <div><div class="hint" style="margin:0 0 4px">充电上限</div><input id="b-pc" type="number" min="20" max="100" inputmode="numeric"></div>
+    <div><div class="hint" style="margin:0 0 4px">恢复充电</div><input id="b-rc" type="number" min="5" max="99" inputmode="numeric"></div>
   </div>
-  <div class="stat">
-    <span class="sd" id="s4d"></span>
-    <div class="sm">
-      <div class="sl">Wi-Fi ↔ USB 互访</div>
-      <div class="sv" id="s4v">--</div>
-      <div class="sx" id="s4x">两边设备能不能直接互相访问</div>
-    </div>
+  <div class="row seg">
+    <button onclick="saveBatt()">保存阈值</button>
+    <button id="b-chg" onclick="toggleChg()">充电控制</button>
+  </div>
+  <div class="hint" id="h-batt"></div>
+</section>
+
+<section class="card">
+  <h2>无线 ADB</h2>
+  <div class="row">
+    <button class="grow" id="b-adb" onclick="toggleAdb()">ADB over Wi-Fi</button>
+    <input id="b-port" type="number" min="1024" max="65535" inputmode="numeric" style="width:110px">
+  </div>
+  <div class="row">
+    <button class="grow" onclick="clearPersist()">清除 persist 残留</button>
+  </div>
+  <div class="hint" id="h-adb"></div>
+</section>
+
+<section class="card">
+  <h2>运行日志</h2>
+  <div class="row seg3">
+    <button onclick="loadLog()">刷新</button>
+    <button onclick="logDump()">导出到 Download</button>
+    <button id="b-logsw" onclick="toggleLog()">记录中</button>
+  </div>
+  <div class="logbox" id="logbox">加载中…</div>
+  <div class="row" style="margin-top:10px">
+    <button class="danger grow" onclick="logClear()">清空日志</button>
   </div>
 </section>
 
-<div class="grid2">
-  <section class="card">
-    <div class="mh"><h2>USB 类型</h2></div>
-    <div class="q4" id="usbTypes"></div>
-    <div class="sub" id="usbFunc">--</div>
-  </section>
-
-  <section class="card">
-    <div class="mh"><h2>无线 ADB</h2></div>
-    <div class="big" id="adbState">--</div>
-    <div class="sub" id="adbPort">--</div>
-    <div class="sub" id="adbHint" style="display:none"></div>
-    <div class="btns2" style="margin-top:10px">
-      <button id="adbOn">开启</button>
-      <button id="adbOff">关闭</button>
-    </div>
-    <div class="btns2" style="margin-top:8px">
-      <button class="tag" id="adbKeep" style="justify-content:center">保活</button>
-      <button class="tag" id="adbBoot" style="justify-content:center">开机自启</button>
-    </div>
-    <div class="warnrow" id="adbResidueRow" style="display:none">
-      <span id="adbResidue">--</span>
-      <button class="tag" id="adbClear" style="color:var(--warn);border-color:#4a3a15">清理</button>
-    </div>
-  </section>
-</div>
-
-<div class="card">
-  <div class="mh">
-    <h2>电量 / 充电阈值</h2>
-    <button class="tag" id="battRefresh">刷新</button>
-  </div>
-  <div class="batt"><b id="cap">--</b><small class="unit">%</small><small id="bstat"></small></div>
-
-  <div class="slabel"><span>充电上限</span><b id="pcapv">88</b></div>
-  <div class="slider locked" id="pwrap">
-    <div class="track"><div class="fill" id="pfill"></div></div>
-    <input type="range" id="pcap" min="20" max="100" step="1" value="88" disabled>
-  </div>
-
-  <div class="slabel"><span>恢复阈值</span><b id="rcapv">83</b></div>
-  <div class="slider blue locked" id="rwrap">
-    <div class="track"><div class="fill" id="rfill"></div></div>
-    <input type="range" id="rcap" min="5" max="99" step="1" value="83" disabled>
-  </div>
-
-  <div class="btns3" style="grid-template-columns:1fr 1.1fr 1fr 1fr">
-    <button id="editToggle">编辑</button>
-    <button id="chgStart">启动</button>
-    <button id="chgRestart">重启</button>
-    <button class="danger" id="chgStop">停止</button>
-  </div>
-  <div class="hint"><span id="chgdot" class="dot" style="background:#555"></span><span id="chgtxt">控制器状态未知</span> · <span id="temp">--</span>℃</div>
-  <div class="hint" style="margin-top:5px"><span id="powdot" class="dot" style="background:#555"></span><span id="powtxt">--</span></div>
-  <div class="hint" style="margin-top:5px" id="chgch">充电通道：--</div>
-</div>
-
-<div class="card">
-  <div class="mh">
-    <h2>已连接设备 <span id="cnt" style="color:var(--fg)"></span></h2>
-    <button class="tag" id="fwdToggle">转发设置</button>
-  </div>
-  <div class="sub" id="fwdState" style="margin:0 0 2px">--</div>
-  <div id="fwdPanel" hidden>
-    <div class="row" style="margin:8px 0">
-      <input type="text" id="fwdPort" placeholder="端口，例如 9000" inputmode="numeric" style="flex:1">
-      <button class="primary" id="fwdAdd">添加</button>
-    </div>
-    <div id="fwdList"></div>
-    <div class="sub">目标设备 <b id="fwdTarget">--</b>（自动跟随，不需要手填）</div>
-  </div>
-
-  <table>
-    <thead><tr><th>IP</th><th>名称</th><th>MAC</th></tr></thead>
-    <tbody id="devs"><tr><td colspan="3" class="empty">暂无设备</td></tr></tbody>
-  </table>
-</div>
-
-<div class="card">
-  <div class="mh">
-    <h2>运行日志</h2>
-    <button class="tag" id="logToggle">记录中</button>
-    <span class="sub" style="margin:0 0 0 8px" id="logSize">--</span>
-  </div>
-  <pre class="logbox" id="logBox">加载中…</pre>
-  <div class="btns3">
-    <button id="logReload">刷新</button>
-    <button id="logDl">下载</button>
-    <button class="danger" id="logClear">清空</button>
-  </div>
-</div>
-
+<footer id="foot"></footer>
 <div id="toast"></div>
 
 <script>
-const $ = s => document.querySelector(s);
-
-// 内核报的是英文状态，界面上统一中文
-const BSTAT = {Charging:'充电中', Discharging:'放电中', Full:'已充满',
-  'Not charging':'未充电', Unknown:''};
-
-let ST = {};
-
-function toast(msg){
-  const t=$('#toast'); t.textContent=msg; t.classList.add('on');
-  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),1800);
-}
-async function api(action, extra={}){
-  const p = new URLSearchParams({a:action, ...extra});
-  const r = await fetch('/cgi-bin/api.sh?'+p.toString(), {cache:'no-store'});
-  return await r.json();
-}
-
+var S = {};
+function $(id){ return document.getElementById(id); }
+function toast(m){ var t=$('toast'); t.textContent=m; t.classList.add('on'); clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('on');},1800); }
 function bridge(){ return (window.NetBatt && window.NetBatt.setHotspot) ? window.NetBatt : null; }
-
-// 地址条只放"别的设备能用"的两个地址；短横线显示更清楚
-function setAddr(sel, txt){
-  const box = $(sel), el = box.querySelector('b');
-  if(txt){
-    const u = txt.replace(/^https?:\/\//,'');
-    el.textContent = u;
-    box.classList.add('on'); box.classList.remove('off');
-  }else{
-    el.textContent = '未开启';
-    box.classList.remove('on'); box.classList.add('off');
-  }
+function fmtLeft(s){
+  s = parseInt(s,10)||0;
+  if(s<=0) return '';
+  var h=Math.floor(s/3600), m=Math.floor((s%3600)/60);
+  return h>0 ? (h+' 小时 '+m+' 分') : (m+' 分');
 }
 
-function render(s){
-  ST = s;
-
-  setAddr('#addrUsb', s.web_usb);
-  setAddr('#addrAp', s.web_ap);
-  setAddr('#addrFix', (s.ap==1 || s.usb==1) ? 'http://' + (s.fix_ip||'') + ':8080' : '');
-
-  $('#apState').textContent = s.ap==1 ? '已开启' : '未开启';
-  $('#apState').style.color = s.ap==1 ? 'var(--acc)' : 'var(--dim)';
-  pairBtn('#apOn', '#apOff', s.ap);
-  tagOn('#apKeep', s.keep_wifi);
-  tagOn('#apBoot', s.boot_wifi);
-  hintLine('#apHint', s.ap, s.keep_wifi, s.boot_wifi);
-
-  if(s.usb==1) $('#usbState').textContent = '已开启';
-  else if(s.usb_online==1) $('#usbState').textContent = '已插线';
-  else $('#usbState').textContent = '未开启';
-  $('#usbState').style.color = s.usb==1 ? 'var(--acc)' : 'var(--dim)';
-  pairBtn('#usbOn', '#usbOff', s.usb);
-  tagOn('#usbKeep', s.keep_usb);
-  tagOn('#usbBoot', s.boot_usb);
-  hintLine('#usbHint', s.usb, s.keep_usb, s.boot_usb);
-
-  renderNet(s);
-  renderTypes(s);
-  renderAdb(s);
-
-  $('#cnt').textContent = s.count ? `(${s.count})` : '';
-  $('#devs').innerHTML = s.count
-    ? s.clients.map(c=>`<tr><td>${c.ip}</td><td class="name"><span class="dot"></span>${c.host||'-'}</td><td>${c.mac}</td></tr>`).join('')
-    : '<tr><td colspan="3" class="empty">暂无设备</td></tr>';
-
-  renderBatt(s);
-  $('#fwdTarget').textContent = s.target || '--';
-  $('#logSize').textContent = bytes(s.log_size) + ' / ' + bytes(s.log_max);
-  const lt = $('#logToggle');
-  lt.textContent = s.log_on ? '记录中' : '已暂停';
-  lt.classList.toggle('on', !!s.log_on);
-  renderFwdState(s);
-  renderFwd(s.fwd);
-}
-
-// 电量 / 充电这一块单独抽出来：卡片上的小刷新按钮只刷这里，不打断别的地方
-function renderBatt(s){
-  const b = s.batt;
-  $('#cap').textContent = b.cap;
-  $('#bstat').textContent = BSTAT[b.status] || b.status || '';
-  $('#temp').textContent = b.temp;
-  paintPower(b, s);
-
-  if(!editing){
-    $('#pcap').value = b.pc; paint('#pcap','#pcapv');
-    $('#rcap').value = b.rc; paint('#rcap','#rcapv');
-  }
-
-  $('#chgdot').style.background = b.enabled ? (b.state==='off' ? 'var(--warn)' : 'var(--acc)') : '#555';
-  $('#chgtxt').textContent = chgText(b);
-  $('#chgStart').classList.toggle('active', !!b.enabled);
-  $('#chgStop').classList.toggle('active', !b.enabled);
-  $('#chgch').textContent = chgDesc(b);
-}
-
-// 控制器状态说人话：插没插充电器、为什么停、是不是旁路供电
-function chgText(b){
-  if(!b.enabled) return '控制器已停止 · 按系统默认充电，不受阈值限制';
-  const p = b.plugged==1;
-  const stopped = b.state === 'off';
-  if(!p && !stopped) return '未插充电器 · 正在用电池';
-  if(!p && stopped) return '未插充电器 · 控制器开着，等接上充电器再判断';
-  if(stopped){
-    if(+(b.temp||0) >= +(b.mt||45)) return `已插充电器 · 温度 ${b.temp}℃ 过高，暂停充电`;
-    if(+(b.cap||0) >= +(b.pc||100)) return `已插充电器 · 电量 ${b.cap}% 已达上限 ${b.pc}%，停止充电（走充电器旁路供电）`;
-    return `已插充电器 · 暂停充电中（低于 ${b.rc}% 自动恢复）`;
-  }
-  if(b.status === 'Full') return '已插充电器 · 已充满，走充电器旁路供电';
-  if(+(b.cap||0) <= +(b.rc||0)) return `已插充电器 · 电量 ${b.cap}% 低于恢复阈值 ${b.rc}%，正在充电`;
-  return `已插充电器 · 正在充电（到 ${b.pc}% 停）`;
-}
-
-// 三行状态：手机能不能上网、连进来几台、USB 通不通、谁在发地址。
-// 全部用完整句子，不再用「DHCP / 链路 / 上行」这种只有写代码的人才看得懂的词。
-function renderNet(s){
-  const devRole = {};
-  (s.ifaces||[]).forEach(i=>{ devRole[i.dev]=i.role; });
-  let apCnt=0, usbCnt=0;
-  (s.clients||[]).forEach(c=>{
-    if(devRole[c.dev]==='hotspot') apCnt++;
-    else if(devRole[c.dev]==='usb') usbCnt++;
-  });
-
-  // 1) 手机网络
-  const up = s.uplink==='ok';
-  $('#s1d').style.background = up ? 'var(--acc)' : (s.uplink==='down' ? 'var(--bad)' : '#555');
-  $('#s1v').textContent = up ? '正常' : (s.uplink==='down' ? '上不了外网' : '检测中');
-  $('#s1v').style.color = up ? 'var(--acc)' : (s.uplink==='down' ? 'var(--bad)' : 'var(--dim)');
-  $('#s1x').textContent = up ? '手机自己可以访问外网，连进来的设备也能跟着上网'
-                             : '手机自己上不了外网，连进来的设备也不会有网';
-
-  // 2) 连进来的设备
-  const tot = apCnt + usbCnt;
-  $('#s2d').style.background = tot ? 'var(--acc)' : '#555';
-  $('#s2v').textContent = tot ? ('共 ' + tot + ' 台') : (s.ap==1 || s.usb==1 ? '还没有设备连上' : '共享没开');
-  $('#s2v').style.color = tot ? 'var(--acc)' : 'var(--dim)';
-  $('#s2x').textContent = '热点 ' + apCnt + ' 台 · USB ' + usbCnt + ' 台';
-
-  // 3) USB 连接
-  const NET = {ok:'正常', no_gw:'没有网关地址', no_peer:'对端还没连上',
-    conflict:'网段跟上级冲突', down:'没有网卡', unknown:'未知'};
-  let d3='#555', v3='未开启', x3='插上 USB 线并开启共享后，这里会显示对端地址';
-  if(s.usb!=1 && s.usb_online!=1){
-    v3='没插线'; x3='手机没有检测到 USB 数据连接';
-  }else if(s.usb!=1){
-    v3='已插线，未开启共享'; x3='点上面「USB 网桥 · 开启」';
-  }else if(s.usb_net==='ok'){
-    d3='var(--acc)'; v3='正常'; x3='对端地址 ' + (s.usb_peer||'未知') + '，两侧可以互访';
-  }else{
-    d3='var(--bad)'; v3=NET[s.usb_net]||'不正常';
-    x3 = s.usb_net==='no_peer' ? '网卡在，但对端还没拿到地址（' + (s.usb_peer_net||'') + '）'
-       : s.usb_net==='down' ? '系统没有建出 USB 网卡，换一个「USB 类型」再试'
-       : s.usb_net==='conflict' ? 'USB 网段和上级路由撞了，去改网段'
-       : '网关地址不在 USB 网卡上';
-  }
-  if(s.fwd&&s.fwd.length&&s.usb_net!=='ok'&&s.usb==1) x3 += '；转发也就跟着不通';
-  $('#s3d').style.background = d3;
-  $('#s3v').textContent = v3;
-  $('#s3v').style.color = s.usb_net==='ok' ? 'var(--acc)' : (d3==='var(--bad)'?'var(--bad)':'var(--dim)');
-  $('#s3x').textContent = x3;
-
-  // 4) 热点 ↔ USB 互访（模块现在唯一负责的网络功能）
-  let d4='#555', v4='未打通', x4='热点和 USB 共享都开启后自动打通，不用设网段';
-  const bs = s.bridge || 'off';
-  if(bs==='on'){
-    d4='var(--acc)'; v4='已打通';
-    x4='热点 ' + (s.bridge_ap||'?') + ' ↔ USB ' + (s.bridge_usb||'?') + '，两边设备可以直接互访';
-  }else if(bs==='same'){
-    d4='var(--acc)'; v4='同一网段';
-    x4='两侧落在同一网段，本来就能直连，不需要桥接';
-  }else if(bs==='no_ap'){
-    v4='热点未开'; x4='开热点后自动打通';
-  }else if(bs==='no_usb'){
-    v4='USB 未共享'; x4='开启 USB 共享后自动打通';
-  }
-  $('#s4d').style.background = d4;
-  $('#s4v').textContent = v4;
-  $('#s4v').style.color = d4==='var(--acc)' ? 'var(--acc)' : 'var(--dim)';
-  $('#s4x').textContent = x4;
-}
-
-// USB 类型只给本机 gadget 真有的那几个：点了没反应的按钮不如不画。
-// 本机没有的（vivo 这类只有 rndis）画成禁用，说明为什么点了没用。
-function renderTypes(s){
-  const box = $('#usbTypes');
-  const has = (' ' + (s.usb_types||'') + ' ');
-  const SUPP = [['rndis','RNDIS'],['ncm','NCM'],['ecm','ECM']];
-  const avail = SUPP.filter(t=>has.indexOf(' '+t[0]+' ')>-1);
-  const miss  = SUPP.filter(t=>has.indexOf(' '+t[0]+' ')<0);
-  const cfg = s.usb_net_cfg || 'auto';
-  box.innerHTML = '';
-  const mk = (val, label, dis)=>{
-    const b = document.createElement('button');
-    b.textContent = label; b.dataset.net = val;
-    if(dis) b.disabled = true;
-    b.classList.toggle('active', cfg===val);
-    b.onclick = ()=>setNet(val);
-    box.appendChild(b);
-  };
-  // 本机一个网络 function 都读不到（gadget 不可读）时不瞎猜，只留自动
-  if(!avail.length){
-    mk('auto','自动',false);
-    $('#usbFunc').textContent = '读不到本机可用的网络类型，保持自动';
-    return;
-  }
-  mk('auto','自动',false);
-  avail.forEach(t=>mk(t[0], t[1], false));
-  miss.forEach(t=>mk(t[0], t[1], true));
-
-  const NET_NAME = {rndis:'RNDIS', ncm:'NCM', ecm:'ECM'};
-  const linkWarn = (s.usb_mode === 'manual' && s.usb_linked == 0);
-  const el=$('#usbFunc');
-  // 这半张卡只有 170px 宽，前缀能省就省，不然会从词中间断行
-  let txt = (NET_NAME[s.usb_func] || s.usb_func || '--')
-    + (s.usb_mode === 'native' ? ' · 系统共享'
-       : s.usb_mode === 'manual' ? ' · 模块自建' : '')
-    + (linkWarn ? ' · 未链接' : '');
-  if(miss.length) txt += '<br>' + miss.map(t=>t[1]).join('、') + ' 本机不支持';
-  el.innerHTML = txt;
-  el.style.color = linkWarn ? 'var(--warn)' : '';
-}
-
-function renderAdb(s){
-  const ADB_TXT = {0:'已关闭', 1:'监听中', 2:'已配置，未监听'};
-  $('#adbState').textContent = ADB_TXT[s.adb_tcp] || '--';
-  $('#adbState').style.color = s.adb_tcp==1 ? 'var(--acc)'
-    : (s.adb_tcp==2 ? 'var(--warn)' : 'var(--dim)');
-  pairBtn('#adbOn', '#adbOff', s.adb_tcp==1 ? 1 : 0);
-  tagOn('#adbKeep', s.adb_keep);
-  tagOn('#adbBoot', s.adb_boot);
-  hintLine('#adbHint', s.adb_tcp==1 ? 1 : 0, s.adb_keep, s.adb_boot);
-
-  const resid = s.adb_persist || '';
-  $('#adbResidueRow').style.display = resid ? 'flex' : 'none';
-  $('#adbResidue').textContent = resid ? ('persist=' + resid) : '';
-  // 这个端口是给"另一台设备"连的：只列对端真能走到的接口，
-  // 蜂窝地址（ccmni/rmnet）在运营商内网，写上去也连不通
-  if(s.adb_tcp==1 && s.adb_port){
-    // 优先给 USB 与热点这两个"另一台设备真的走得到"的地址，最多两条，
-    // 卡片只有半屏宽，列三条会把按钮挤下去
-    const order = ['usb','hotspot','up'];
-    const reach = [];
-    order.forEach(r=>{
-      (s.ifaces||[]).forEach(i=>{ if(i.role===r && reach.length<2) reach.push(i); });
-    });
-    if(reach.length){
-      const urls = reach.map(i=>i.ip.split('/')[0]+':'+s.adb_port);
-      $('#adbPort').innerHTML = '别的设备连<br><b>' + urls.join('</b><br><b>') + '</b>';
-    }else{
-      $('#adbPort').textContent = '监听 ' + s.adb_port + ' · 开 USB 共享或热点后这里会显示可连地址';
-    }
-  }else{
-    $('#adbPort').textContent = s.adb_port ? ('端口 ' + s.adb_port) : '端口未监听';
-  }
-}
-
-function renderFwdState(s){
-  const el = $('#fwdState');
-  const n = (s.fwd||[]).length;
-  if(!n){
-    el.textContent = '没有设置转发端口。加上端口后，访问 ' + (s.fix_ip||'') + ':端口 会自动转到 USB 那台设备。';
-    el.style.color = '';
-    return;
-  }
-  const st = s.fwd_state;
-  const map = {
-    ok: ['已生效（' + s.fwd_rules + ' 条规则）','var(--acc)'],
-    no_peer: ['规则已建，但对端还没连上','var(--warn)'],
-    no_rule: ['规则没建成，把它删了重加一次','var(--bad)'],
-    none: ['',''],
-    off: ['','']
-  };
-  const m = map[st] || ['状态未知',''];
-  const txt = n + ' 个端口 → ' + (s.target || '对端未知') + ' · ' + m[0];
-  el.textContent = txt;
-  el.style.color = m[1];
-}
-
-function bytes(n){
-  n = +n || 0;
-  if(n >= 1048576) return (n/1048576).toFixed(2) + ' MB';
-  if(n >= 1024) return (n/1024).toFixed(1) + ' KB';
-  return n + ' B';
-}
-
-// 只读最近 150 行：整个文件动辄几 MB，没必要每次全拉
-async function loadLog(){
-  const box = $('#logBox');
-  if(!box) return;
-  try{
-    const r = await fetch('/cgi-bin/api.sh?a=log&n=150', {cache:'no-store'});
-    if(!r.ok) throw new Error(r.status);
-    const t = await r.text();
-    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 32;
-    box.textContent = t.trim() || '（暂无记录）';
-    if(nearBottom) box.scrollTop = box.scrollHeight;
-  }catch(e){
-    box.textContent = '读取失败：' + e.message;
-  }
-}
-
-function chgDesc(b){
-  if(!b.ch || b.ch==='none') return '充电通道：未找到可控节点';
-  const plat = {qcom:'骁龙', mtk:'天玑'}[b.plat] || '其他平台';
-  const node = (b.node||'').split('/').filter(Boolean).pop() || '--';
-  if(b.ch==='soc'){
-    const o = b.soc_orig ? `（接管前 ${b.soc_orig}）` : '';
-    return `充电通道：${plat} · 目标电量型 ${node}=${b.sw}${o}`;
-  }
-  return `充电通道：${plat} · 开关型 ${node}=${b.sw}`;
-}
-
-function renderFwd(list){
-  const box = $('#fwdList');
-  list = list || [];
-  if(!list.length){
-    box.innerHTML = '<div class="sub">暂无转发端口</div>';
-    return;
-  }
-  box.innerHTML = list.map(p =>
-    `<div class="kv"><span>${p}</span><button class="ghost" data-p="${p}" style="padding:2px 9px;font-size:12px">移除</button></div>`
-  ).join('');
-  box.querySelectorAll('button[data-p]').forEach(b=>{ b.onclick = ()=>fwdOp('del', b.dataset.p); });
-}
-
-async function fwdOp(op, port){
-  try{
-    const r = await api('fwd', {op, port});
-    if(r && r.ok===0){ toast('端口不合法'); return; }
-    const all = await api('fwd', {});
-    renderFwd(all.fwd);
-    toast(op==='add' ? '已添加转发 ' + port : '已移除 ' + port);
-    refresh();
-  }catch(e){ toast('操作失败'); }
-}
-
-// 三个功能统一四个按钮：开启 / 关闭 / 保活 / 开机自启。
-// 开启、关闭互斥高亮；保活和开机自启各自独立，不受当前开关状态限制。
-function pairBtn(onSel, offSel, on){
-  const a=$(onSel), b=$(offSel); if(!a||!b) return;
-  a.classList.toggle('on', on==1);
-  b.classList.toggle('on', on!=1);
-}
-function tagOn(sel, on){
-  const el=$(sel); if(!el) return;
-  el.classList.toggle('on', on==1);
-  el._on = on==1 ? 1 : 0;
-}
-// 状态说明：只讲「自动行为」和当前状态的关系，不写术语
-function hintLine(sel, on, keep, boot){
-  const el=$(sel); if(!el) return;
-  const p = [];
-  if(keep==1) p.push('保活：被系统关掉会自动恢复');
-  if(boot==1) p.push('开机自启：重启后自动开启');
-  if(p.length && on!=1) p.push('当前是关闭状态');
-  el.textContent = p.join(' · ');
-  el.style.display = p.length ? 'block' : 'none';
-}
-
-function paintPower(b, s){
-  const w = +(b.w||0), a = +(b.a||0);
-  let txt, col;
-  if(b.dir==='full'){ txt = '已充满 · 待机'; col = 'var(--acc)'; }
-  else if(b.dir==='chg'){ txt = `正在充电 · ${a.toFixed(2)} A · +${w.toFixed(1)} W`; col = 'var(--acc)'; }
-  else if(b.dir==='dis'){ txt = `正在放电 · ${Math.abs(a).toFixed(2)} A · ${w.toFixed(1)} W`; col = '#ff8a5c'; }
-  else { txt = '待机 · 电流可忽略'; col = '#555'; }
-  if(b.usb_max>0 && b.usb_max<=500000 && s.ap==1 && w<1.5)
-    txt += `｜USB 口只给 ${(b.usb_max/1000000).toFixed(1)} A`;
-  $('#powtxt').textContent = txt;
-  $('#powdot').style.background = col;
-}
-function paint(id, vid){
-  const el=$(id), v=+el.value, mn=+el.min, mx=+el.max;
-  $(vid).textContent=v;
-  $(id==='#pcap' ? '#pfill' : '#rfill').style.width = ((v-mn)/(mx-mn)*100)+'%';
-}
-
-// 保活 / 开机自启：两个独立开关，走同一套接口
-async function setKeep(field, on){
-  const r = await api('keep', {[field]: on ? 1 : 0});
-  if(!r.ok){ toast('设置失败'); return; }
-  toast((field==='adb' ? '无线 ADB' : field==='wifi' ? '热点' : 'USB 共享')
-        + '保活已' + (on ? '开启' : '关闭'));
-  refresh();
-}
-async function setBoot(field, on){
-  const r = await api('boot', {[field]: on ? 1 : 0});
-  if(!r.ok){ toast('设置失败'); return; }
-  toast((field==='adb' ? '无线 ADB' : field==='wifi' ? '热点' : 'USB 共享')
-        + '开机自启已' + (on ? '开启' : '关闭'));
-  refresh();
+async function api(action, extra){
+  var q = 'a='+action;
+  if(extra){ for(var k in extra){ q += '&'+k+'='+encodeURIComponent(extra[k]); } }
+  var r = await fetch('cgi-bin/api.sh?'+q+'&_='+Date.now(), {cache:'no-store'});
+  return await r.text();
 }
 
 async function refresh(){
-  try{ render(await api('status')); }
-  catch(e){ console.warn(e); }
-}
-
-// 只刷「网络状态」这一块，不碰其他卡片。连接状态变化快（车机插拔、热点
-// 开关、设备上下线），单独刷这一块既快又不打断正在看的电量/转发设置。
-async function refreshNet(){
-  try{ renderNet(await api('status')); }
-  catch(e){ console.warn(e); }
-}
-
-// 只刷「电量 / 充电」这一块。卡片上的小刷新按钮走这里，不动滑杆和别的卡片
-async function refreshBatt(){
-  try{ renderBatt(await api('status')); }
-  catch(e){ console.warn(e); }
-}
-
-function clampPair(){
-  let p=+$('#pcap').value, r=+$('#rcap').value;
-  if(r>=p){ r=p-1; $('#rcap').value=r; }
-  if(r<5){ r=5; $('#rcap').value=r; }
-  return {p,r};
-}
-async function pushBatt(){
-  const {p,r} = clampPair();
-  paint('#pcap','#pcapv'); paint('#rcap','#rcapv');
   try{
-    const j = await api('batt',{pause:p, resume:r});
-    if(!j.ok) throw new Error('invalid');
-    toast(`上限 ${p}% · 低于 ${r}% 恢复充电`);
-    refresh();
-  }catch(e){ toast('设置失败'); }
+    var r = await fetch('cgi-bin/api.sh?a=status&_='+Date.now(), {cache:'no-store'});
+    S = await r.json();
+  }catch(e){ $('s-ap').textContent='离线'; $('s-ap').className='v warn'; return; }
+  render();
 }
 
-$('#pcap').addEventListener('input', ()=>{ clampPair(); paint('#pcap','#pcapv'); paint('#rcap','#rcapv'); });
-$('#rcap').addEventListener('input', ()=>{ clampPair(); paint('#pcap','#pcapv'); paint('#rcap','#rcapv'); });
+function render(){
+  $('ver').textContent = (S.ver||'v-') + ' · ' + (S.build||'0');
 
-let editing = false;
-function setEdit(on){
-  editing = on;
-  $('#pcap').disabled = !on;
-  $('#rcap').disabled = !on;
-  $('#pwrap').classList.toggle('locked', !on);
-  $('#rwrap').classList.toggle('locked', !on);
-  const b = $('#editToggle');
-  b.textContent = on ? '保存' : '编辑';
-  b.classList.toggle('on', on);
-  if(!on) pushBatt();
-}
-$('#editToggle').addEventListener('click', ()=>setEdit(!editing));
+  var ap = S.ap===1;
+  $('s-ap').textContent = ap ? '已开启' : '已关闭';
+  $('s-ap').className = 'v ' + (ap?'ok':'off');
 
-$('#fwdToggle').addEventListener('click', ()=>{
-  const p = $('#fwdPanel');
-  p.hidden = !p.hidden;
-  $('#fwdToggle').classList.toggle('on', !p.hidden);
-});
+  var car = S.power===1;
+  $('s-car').textContent = car ? '有电' : '断电';
+  $('s-car').className = 'v ' + (car?'ok':'off');
+  $('s-cli').textContent = ap ? (S.clients||0)+' 台' : '—';
 
-$('#fwdAdd').addEventListener('click', ()=>{
-  const v = $('#fwdPort').value.trim();
-  if(!/^\d{1,5}$/.test(v) || +v < 1 || +v > 65535){ toast('端口需为 1-65535'); return; }
-  fwdOp('add', v);
-  $('#fwdPort').value = '';
-});
+  // 模式
+  var mode = S.mode || 'auto';
+  $('b-mode-auto').className = mode==='auto' ? 'active' : '';
+  $('b-mode-on').className   = mode==='on'   ? 'active' : '';
+  $('b-mode-off').className  = mode==='off'  ? 'active' : '';
 
-// 开关热点 / USB 共享：APP 内走 JS 接口，浏览器里交给 CGI 转发特权应用
-async function setShare(type, on){
-  const name = type==='usb' ? 'USB 共享' : '热点';
-  const nb = bridge();
-  if(nb && type!=='usb'){
-    try{
-      const r = nb.setHotspot(!!on);
-      // 告诉模块这次是手动开/关，保活据此让路，不再把用户关掉的热点重新拉起
-      api('intent',{what:'wifi',on:on?1:0}).catch(()=>{});
-      toast(r || ('已请求' + (on?'开启':'关闭') + name));
-      setTimeout(refresh, 2500);
-    }catch(e){ toast('调用特权接口失败：'+e); }
-    return;
-  }
-  try{
-    await api('hs',{type:type, on: on?1:0});
-    toast('已请求' + (on?'开启':'关闭') + name);
-    setTimeout(refresh, 2500);
-  }catch(e){ toast('操作失败'); }
-}
-$('#apOn').addEventListener('click', ()=>setShare('wifi', 1));
-$('#apOff').addEventListener('click', ()=>setShare('wifi', 0));
-$('#usbOn').addEventListener('click', ()=>setShare('usb', 1));
-$('#usbOff').addEventListener('click', ()=>setShare('usb', 0));
-$('#apKeep').addEventListener('click', ()=>setKeep('wifi', !(ST.keep_wifi==1)));
-$('#usbKeep').addEventListener('click', ()=>setKeep('usb', !(ST.keep_usb==1)));
-$('#apBoot').addEventListener('click', ()=>setBoot('wifi', !(ST.boot_wifi==1)));
-$('#usbBoot').addEventListener('click', ()=>setBoot('usb', !(ST.boot_usb==1)));
+  // 手动开/关只在“自动”下有独立含义：常开/关闭是持久意图，
+  // 手动改一下下一轮就会被模式覆盖，所以直接禁掉，避免看起来像坏了。
+  $('b-hs-on').disabled  = mode!=='auto';
+  $('b-hs-off').disabled = mode!=='auto';
 
-// USB 网络类型切换：对端看不到网卡时是这里的问题，不是 DHCP
-async function setNet(v){
-  try{
-    const r = await api('usbnet', {net:v});
-    if(!r || !r.ok){
-      toast(r && r.error==='func_missing' ? '本机 kernel 没有这个网络功能' : '切换失败');
-      return;
+  // 说明
+  var t = [];
+  if(mode==='off'){
+    t.push('关闭模式：模块不会打开热点。');
+  }else if(mode==='on'){
+    t.push('常开模式：有电就开，断电就关，不会被空转保护关闭。');
+  }else{
+    t.push('自动模式：有电持续 ' + S.on_confirm + ' 秒后开，断电持续 ' + S.off_confirm + ' 秒后关。');
+    if(S.suppress===1){
+      t.push('<b>本次供电周期已抑制</b>，下次通电或点「立即开热点」恢复。');
+    }else if(S.idle_min>0){
+      if(ap && S.idle_left>0) t.push('无设备连接，' + fmtLeft(S.idle_left) + '后自动关闭。');
+      else t.push('若 ' + S.idle_min + ' 分钟无设备连接，自动关闭。');
     }
-    toast('USB 网络：' + (v==='auto' ? '自动' : v.toUpperCase()));
-    setTimeout(refresh, 2600);
-  }catch(e){ toast('切换失败'); }
-}
-
-async function setAdb(on){
-  try{
-    const r = await api('adbtcp', {on: on?1:0});
-    if(!r || !r.ok){ toast('操作失败'); return; }
-    toast(on ? '无线 ADB 已开启' : '无线 ADB 已关闭');
-    setTimeout(refresh, 1600);
-  }catch(e){ toast('操作失败'); }
-}
-$('#adbOn').addEventListener('click', ()=>setAdb(1));
-$('#adbOff').addEventListener('click', ()=>setAdb(0));
-$('#adbKeep').addEventListener('click', ()=>setKeep('adb', !(ST.adb_keep==1)));
-$('#adbBoot').addEventListener('click', ()=>setBoot('adb', !(ST.adb_boot==1)));
-$('#adbClear').addEventListener('click', async ()=>{
-  try{
-    const r = await api('clearpersist', {});
-    toast(r && r.ok ? '已清理，重启后开发者选项恢复' : '清理失败');
-    setTimeout(refresh, 1200);
-  }catch(e){ toast('清理失败'); }
-});
-
-$('#chgStart').addEventListener('click', async ()=>{ await api('chg',{op:'start'}); toast('已启动充电控制'); setTimeout(refresh,900); });
-$('#chgRestart').addEventListener('click', async ()=>{ await api('chg',{op:'restart'}); toast('已重启充电控制'); setTimeout(refresh,1600); });
-$('#chgStop').addEventListener('click', async ()=>{ await api('chg',{op:'stop'}); toast('已停止并恢复充电'); setTimeout(refresh,900); });
-
-$('#logReload').addEventListener('click', loadLog);
-// WebView 壳没实现下载监听，attachment 会被静默吞掉；改成让模块直接落盘到
-// Download 目录，再提示路径，用户用文件管理器就能取。
-$('#logDl').addEventListener('click', async ()=>{
-  const b = $('#logDl');
-  b.disabled = true; b.textContent = '导出中…';
-  try{
-    const r = await api('logdump');
-    if(r.ok) toast('已保存到 ' + r.path);
-    else toast('导出失败');
-  }catch(e){ toast('导出失败'); }
-  b.disabled = false; b.textContent = '下载';
-});
-// 不用 confirm：WebView 壳里没设 WebChromeClient 时 confirm 会被直接吞掉，按钮就像坏了
-let logArm = 0;
-$('#logClear').addEventListener('click', async ()=>{
-  const b = $('#logClear');
-  if(!logArm){
-    logArm = 1;
-    b.textContent = '再点一次';
-    b.classList.add('on');
-    setTimeout(()=>{ if(logArm){ logArm = 0; b.textContent = '清空'; b.classList.remove('on'); } }, 4000);
-    return;
   }
-  logArm = 0;
-  b.textContent = '清空';
-  b.classList.remove('on');
-  try{ await api('logclear'); toast('日志已清空'); }catch(e){ toast('清空失败'); }
-  loadLog();
-});
+  $('h-auto').innerHTML = t.join('<br>');
 
-$('#logToggle').addEventListener('click', async ()=>{
-  const on = $('#logToggle').classList.contains('on') ? 0 : 1;
+  // 电量
+  var b = S.batt || {};
+  $('b-cap').textContent = b.cap || '--';
+  var dirMap = {chg:'充电中', dis:'放电中', full:'已充满', idle:'待机'};
+  $('b-st').textContent = (dirMap[b.dir]||'') + (b.temp?' · '+b.temp+'℃':'');
+  if(document.activeElement !== $('b-pc')) $('b-pc').value = b.pc || '';
+  if(document.activeElement !== $('b-rc')) $('b-rc').value = b.rc || '';
+  var bc = $('b-chg');
+  bc.className = b.enabled===1 ? 'on' : '';
+  bc.textContent = b.enabled===1 ? '充电控制 开' : '充电控制 关';
+  $('h-batt').innerHTML = '通道 <b>'+ (b.ch||'-') +'</b> · 节点 <b>'+ (b.node||'-') +'</b>' +
+    (b.plat?' · 平台 '+b.plat:'');
+
+  // ADB
+  var ba2 = $('b-adb');
+  ba2.className = 'grow' + (S.adb_tcp===1 ? ' on' : '');
+  ba2.textContent = S.adb_tcp===1 ? 'ADB over Wi-Fi 已开' : 'ADB over Wi-Fi 已关';
+  if(document.activeElement !== $('b-port') && S.adb_port) $('b-port').value = S.adb_port;
+  else if(document.activeElement !== $('b-port')) $('b-port').value = 5555;
+  var codeMap = {0:'未配置', 1:'监听中', 2:'已配置但未监听'};
+  $('h-adb').innerHTML = '状态 <b>'+ (codeMap[S.adb_code]||'-') +'</b>' +
+    (S.adb_persist ? '<br>持久属性残留：<b>'+S.adb_persist+'</b>，建议点上面的清除按钮' : '');
+
+  // 日志开关
+  var bl = $('b-logsw');
+  bl.className = S.log_on===1 ? 'on' : '';
+  bl.textContent = S.log_on===1 ? '记录中' : '已暂停';
+
+  $('foot').innerHTML = (S.url ? S.url+'<br>' : '') + '日志 '+ Math.round((S.log_size||0)/1024) +'KB';
+}
+
+async function setMode(v){
+  await api('mode',{v:v});
+  toast(v==='auto'?'已切换：自动':(v==='on'?'已切换：常开':'已切换：关闭'));
+  setTimeout(refresh,900);
+}
+async function setHs(on){
+  if((S.mode||'auto')!=='auto'){ toast('先切到「自动」模式'); return; }
+  var b = bridge(); if(b){ try{ b.setHotspot(!!on); }catch(e){} }
+  await api('hs',{v:on?1:0});
+  toast(on?'已请求开启热点':'已请求关闭热点');
+  setTimeout(refresh,1600);
+}
+async function saveBatt(){
+  var p=$('b-pc').value, r=$('b-rc').value;
+  var j = JSON.parse(await api('batt',{pause:p, resume:r}));
+  toast(j.ok?'阈值已保存':'参数不合法'); refresh();
+}
+async function toggleChg(){
+  var op = (S.batt && S.batt.enabled===1) ? 'stop' : 'start';
+  await api('chg',{op:op});
+  toast(op==='start'?'充电控制已启动':'充电控制已停止');
+  setTimeout(refresh,800);
+}
+async function toggleAdb(){
+  var on = S.adb_tcp===1 ? 0 : 1;
+  var j = JSON.parse(await api('adbtcp',{on:on, port:$('b-port').value}));
+  toast(j.ok ? (on?'无线 ADB 已开启':'无线 ADB 已关闭') : '端口不合法');
+  refresh();
+}
+async function clearPersist(){
+  await api('clearpersist');
+  toast('已尝试清除 persist 残留');
+  refresh();
+}
+async function loadLog(){
   try{
-    await api('logsw', {on:String(on)});
-    toast(on ? '日志记录已开启' : '日志记录已暂停');
-    refresh();
-  }catch(e){ toast('切换失败'); }
-});
+    var r = await fetch('cgi-bin/api.sh?a=log&n=200&_='+Date.now(), {cache:'no-store'});
+    var txt = await r.text();
+    var box=$('logbox');
+    box.textContent = txt || '（暂无日志）';
+    box.scrollTop = box.scrollHeight;
+  }catch(e){ $('logbox').textContent='读取失败'; }
+}
+async function logDump(){
+  var j = JSON.parse(await api('logdump'));
+  toast(j.ok ? ('已导出到 '+j.path) : '导出失败');
+}
+async function logClear(){
+  await api('logclear');
+  toast('日志已清空');
+  loadLog();
+}
+async function toggleLog(){
+  var on = S.log_on===1 ? 0 : 1;
+  await api('logsw',{on:on});
+  toast(on?'已开始记录':'已暂停记录');
+  refresh();
+}
 
-$('#netRefresh').addEventListener('click', ()=>{ refreshNet(); toast('网络状态已刷新'); });
-$('#battRefresh').addEventListener('click', ()=>{ refreshBatt(); toast('电量已刷新'); });
-paint('#pcap','#pcapv');
-paint('#rcap','#rcapv');
 refresh();
 loadLog();
-setInterval(refresh, 3000);
-setInterval(()=>{ if(!document.hidden) refreshNet(); }, 2000);
-setInterval(()=>{ if(!document.hidden) loadLog(); }, 15000);
+setInterval(refresh, 5000);
+setInterval(loadLog, 15000);
 </script>
 </body>
 </html>

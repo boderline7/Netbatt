@@ -97,6 +97,13 @@ chg_held() {
   [ "$(cat "$DATA/chg.state" 2>/dev/null)" = "off" ]
 }
 
+# 停充会不会把 online 拉成 0。限流通道不动充电输入，online 一直准；
+# 只有开关通道（input_suspend）才需要靠 status 猜“线还插着”。
+chg_port_held() {
+  chg_held || return 1
+  [ "$(chg_channel)" != "current" ]
+}
+
 # 供电确认（回滞）：原始信号持续 ON_CONFIRM 秒才算有电，
 # 持续 OFF_CONFIRM 秒才算断电；抖一下不改结论。
 # 状态一行：RAW SINCE POWER
@@ -105,9 +112,10 @@ power_update() {
 
   raw=0
   raw_power && raw=1
-  # 自己停充会让 online 归零（高通 input_suspend），但线还插着。
+  # 开关通道（input_suspend）自己停充会把 online 归零，但线还插着；
+  # 限流通道不碰输入，online 一直准，所以只对开关通道做这条兜底。
   # 区分方法：插着不充是 Not charging / Full，真拔线才是 Discharging。
-  if [ "$raw" = 0 ] && chg_held; then
+  if [ "$raw" = 0 ] && chg_port_held; then
     case "$(cat "$BATT/status" 2>/dev/null)" in
       Charging|Full|Not\ charging) raw=1 ;;
     esac
@@ -152,7 +160,7 @@ power_read() {
     POWER=$3
   else
     raw_power && POWER_RAW=1 || POWER_RAW=0
-    if [ "$POWER_RAW" = 0 ] && chg_held; then
+    if [ "$POWER_RAW" = 0 ] && chg_port_held; then
       case "$(cat "$BATT/status" 2>/dev/null)" in
         Charging|Full|Not\ charging) POWER_RAW=1 ;;
       esac

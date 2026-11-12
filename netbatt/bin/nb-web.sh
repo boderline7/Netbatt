@@ -46,9 +46,10 @@ status_json() {
   fi
 
   a=$(ap_iface 2>/dev/null)
+  fo=$(force_get); case "$fo" in 0|1) ;; *) fo=null ;; esac
   cat <<EOF
 {"build":$(nb_build),"ver":"$(nb_ver)",
-"mode":"$(hs_mode)","suppress":$(suppress_get),
+"mode":"$(hs_mode)","force":$fo,"suppress":$(suppress_get),
 "power":${POWER:-0},"power_raw":${POWER_RAW:-0},
 "ap":$(ap_running),"ap_if":"$a","ap_ip":"$(ap_ip)","clients":$(ap_clients),
 "idle_min":$lim,"idle_left":$idle_left,

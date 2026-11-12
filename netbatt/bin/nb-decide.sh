@@ -5,6 +5,14 @@
 
 SUPPRESS=$DATA/suppress
 
+# 手动覆盖：on/off 模式下点开关也要立刻生效，不能被模式当场盖回去。
+# 覆盖一直有效，直到断电（只对“手动开”生效）或用户改模式；重启后自然失效。
+FORCE=$DATA/hs.force
+
+force_get() { $BB cat "$FORCE" 2>/dev/null | $BB head -1; }
+force_set() { printf '%s\n' "$1" > "$FORCE" 2>/dev/null; }
+force_clear() { rm -f "$FORCE" 2>/dev/null; }
+
 hs_mode() { echo "${HS_MODE:-auto}"; }
 
 suppress_get() { [ -f "$SUPPRESS" ] && echo 1 || echo 0; }
@@ -27,26 +35,23 @@ set_mode() {
   cfg_set HS_MODE "$1"
   HS_MODE="$1"
   suppress_clear
+  force_clear
   rm -f "$DATA/idle.since" 2>/dev/null
   log "决策: 模式 -> $1"
   nb_tick
 }
 
-# 用户手动开/关。只有 AUTO 下才有“抑制”这层语义，ON/OFF 下就是直接执行。
+# 用户手动开/关。auto 下用“抑制”表达，on/off 下用“覆盖”，两者都不会被下一轮规则盖掉。
 set_hs() {
   want=$1
   power_read
   m=$(hs_mode)
-  # ON / OFF 是持久意图，手动开关下一轮就会被模式覆盖，所以直接拒绝。
-  # 要关就把模式切成“关闭”，别在这里和模式打架。
-  if [ "$m" != "auto" ]; then
-    log "决策: 模式为 $m，忽略手动开关请求"
-    return 1
-  fi
-  if [ "$want" = "1" ]; then
-    suppress_clear
+  if [ "$m" = "auto" ]; then
+    if [ "$want" = "1" ]; then suppress_clear; else suppress_set "手动关闭"; fi
   else
-    suppress_set "手动关闭"
+    # on/off 是持久意图，手动开关作为一次覆盖，直到断电或用户改模式
+    force_set "$want"
+    log "决策: 手动覆盖 -> $want（模式 $m）"
   fi
   HS_WHY="手动"
   # 手动操作跳过 30 秒冷却：刚被自动开过一次时，用户点“开”不该没反应
@@ -62,6 +67,17 @@ set_hs() {
 
 # 主决策表，见 docs/热点决策表.md §4
 decide_hs() {
+  # 手动覆盖优先。断电时“手动开”失效并清掉覆盖，避免停好车还一直开着热点耗电
+  f=$(force_get)
+  if [ -n "$f" ]; then
+    if [ "$f" = "1" ] && [ "$POWER" = "0" ]; then
+      force_clear
+      HS_TARGET=0; HS_WHY=断电
+    else
+      HS_TARGET=$f; HS_WHY=手动保持
+    fi
+    return 0
+  fi
   case "$(hs_mode)" in
     on)
       if [ "$POWER" = "1" ]; then HS_TARGET=1; HS_WHY=有电

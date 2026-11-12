@@ -207,14 +207,15 @@ function render(){
   // 电量
   var b = S.batt || {};
   $('b-cap').textContent = b.cap || '--';
-  var dirMap = {chg:'充电中', dis:'放电中', full:'已充满', idle:'待机'};
+  var dirMap = {chg:'充电中', dis:'放电中', full:'已充满', idle:'待机', stop:'已停充 · 旁路供电'};
   $('b-st').textContent = (dirMap[b.dir]||'') + (b.temp?' · '+b.temp+'℃':'');
   if(document.activeElement !== $('b-pc')) $('b-pc').value = b.pc || '';
   if(document.activeElement !== $('b-rc')) $('b-rc').value = b.rc || '';
   var bc = $('b-chg');
   bc.className = b.enabled===1 ? 'on' : '';
   bc.textContent = b.enabled===1 ? '充电控制 开' : '充电控制 关';
-  $('h-batt').innerHTML = '通道 <b>'+ (b.ch||'-') +'</b> · 节点 <b>'+ (b.node||'-') +'</b>' +
+  var chMap = {current:'限流', switch:'开关', soc:'目标电量', none:'未找到'};
+  $('h-batt').innerHTML = '通道 <b>'+ (chMap[b.ch]||b.ch||'-') +'</b> · 节点 <b>'+ (b.node||'-') +'</b>' +
     (b.plat?' · 平台 '+b.plat:'');
 
   // ADB

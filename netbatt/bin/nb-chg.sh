@@ -5,6 +5,15 @@
 
 chg_active() { [ -f "$DATA/chg.on" ] && echo 1 || echo 0; }
 
+# 限流通道：只把充电电流压到 0，不动充电输入。
+# 走 input_suspend 会让充电器重新协商 PD（batterysecret 要重新鉴权），
+# 车机那头表现为 USB 反复断开重连（“咚咚”）；限流不碰输入，PD 合同一直有效。
+CHG_CUR=${CHG_CUR:-/sys/class/power_supply/battery/constant_charge_current}
+CHG_CUR_ON=${CHG_CUR_ON:-3000000}
+
+# 当前通道（带缓存），供电判定也要用它
+chg_channel() { chg_detect >/dev/null 2>&1; echo "$CHG_CH"; }
+
 # 首次安装默认开启；用户手动停止后 chg.off 跨重启保留
 chg_init() {
   [ -f "$DATA/chg.on" ] || [ -f "$DATA/chg.off" ] || touch "$DATA/chg.on" 2>/dev/null
@@ -29,11 +38,14 @@ chg_writable() {
 chg_cache_load() {
   [ -f "$DATA/chg.node" ] || return 1
   . "$DATA/chg.node" 2>/dev/null
+  # 旧缓存可能把能限流的机型记成了开关通道，主版本变了就重探一次
+  [ "$CHG_CACHE_V" = "2" ] || return 1
   [ -n "$CHG_NODE" ] && [ -e "$CHG_NODE" ]
 }
 
 chg_cache_save() {
   {
+    echo "CHG_CACHE_V=2"
     echo "CHG_CH=$CHG_CH"
     echo "CHG_NODE=$CHG_NODE"
     echo "CHG_ON=$CHG_ON"
@@ -71,7 +83,20 @@ chg_detect() {
       CHG_CH=soc; CHG_NODE=$SOC_PATH; chg_cache_save; return 0
     fi
   else
-    # 高通及其它：先试开关通道，语义是 0=充 1=停
+    # 高通：优先限流通道。它不碰充电输入，充电器不会重新协商 PD，
+    # USB 也就不会跟着断开重连。个别机型写了 0 无效，会留 chg.fallback
+    # 标记，之后直接用开关通道，不再反复试。
+    if [ ! -f "$DATA/chg.fallback" ] && chg_writable "$CHG_CUR"; then
+      CHG_CH=current; CHG_NODE=$CHG_CUR; CHG_ON=0; CHG_OFF=0
+      # 从旧的开关通道切过来时，input_suspend 可能还停在“暂停”。
+      # 那不是现在的控制手段，必须放开，否则插上电也永远不充。
+      if [ -e "$CHG_SWITCH" ] && [ "$(cat "$CHG_SWITCH" 2>/dev/null)" = "1" ]; then
+        printf '0\n' > "$CHG_SWITCH" 2>/dev/null
+        log "充电: 旧开关通道已放开（$CHG_SWITCH=0），改用限流控制"
+      fi
+      chg_cache_save; return 0
+    fi
+    # 兜底：开关通道，语义是 0=充 1=停
     if chg_writable "$CHG_SWITCH"; then
       CHG_CH=switch; CHG_NODE=$CHG_SWITCH; CHG_ON=0; CHG_OFF=1
       chg_cache_save; return 0
@@ -115,7 +140,16 @@ chg_platform() {
 chg_apply() {
   chg_detect || return 1
 
-  if [ "$CHG_CH" = soc ]; then
+  if [ "$CHG_CH" = current ]; then
+    if [ "$1" = "off" ]; then
+      # 停充前先记住原本的电流上限；各机型内核自己也会调，恢复时不能写死
+      [ -f "$DATA/ccc.orig" ] || cat "$CHG_NODE" 2>/dev/null > "$DATA/ccc.orig"
+      v=0
+    else
+      v=$($BB cat "$DATA/ccc.orig" 2>/dev/null)
+      case "$v" in ''|0) v=$CHG_CUR_ON ;; esac
+    fi
+  elif [ "$CHG_CH" = soc ]; then
     [ -f "$DATA/soc.orig" ] || cat "$CHG_NODE" 2>/dev/null > "$DATA/soc.orig"
     case "$1" in
       off) v=$CHG_SOC_OFF ;;
@@ -132,6 +166,22 @@ chg_apply() {
   [ "$(cat "$CHG_NODE" 2>/dev/null)" = "$v" ] && return 0
   printf '%s\n' "$v" > "$CHG_NODE" 2>/dev/null
   log "充电: 写入 $CHG_NODE=$v（$CHG_CH ${1}）"
+
+  # 限流通道要确认真的停了：少数内核把 0 当成“无限制”或者干脆忽略。
+  # 还在充就留标记改走开关通道，一次就够，不用每轮重试。
+  if [ "$CHG_CH" = "current" ] && [ "$1" = "off" ]; then
+    sleep 3
+    c=$($BB cat "$BATT/current_now" 2>/dev/null); c=${c#-}
+    case "$c" in ''|*[!0-9]*) c=0 ;; esac
+    if [ "$c" -gt 400000 ]; then
+      log "充电: 限流 0 无效（仍有 ${c}µA 在充），改用开关通道"
+      : > "$DATA/chg.fallback" 2>/dev/null
+      rm -f "$DATA/chg.node" 2>/dev/null
+      chg_detect >/dev/null 2>&1
+      [ "$CHG_CH" = "switch" ] && chg_apply off
+    fi
+  fi
+  return 0
 }
 
 # 周期采样：控制器关不关都记，采样是想看清整条充放电曲线
@@ -195,6 +245,14 @@ chg_once() {
   echo "$want" > "$DATA/chg.state" 2>/dev/null
   if [ "$prev" != "$want" ]; then
     log "充电控制: ${prev:-?} -> $want（${cap}% ${t}℃ 上限 $PAUSE_CAP 恢复 $RESUME_CAP）"
+  fi
+
+  # 限流通道兜底：系统温控可能把电流改回去，只有在真的又充起来时补写一次。
+  # 这个写入不触碰充电输入，不会连带让 USB 断开，所以多写几次也无妨。
+  if [ "$want" = "off" ] && [ "$(chg_channel)" = "current" ]; then
+    c=$($BB cat "$BATT/current_now" 2>/dev/null); c=${c#-}
+    case "$c" in ''|*[!0-9]*) c=0 ;; esac
+    [ "$c" -gt 300000 ] && chg_apply off >/dev/null 2>&1
   fi
   return 0
 }
@@ -261,6 +319,13 @@ batt_json() {
       ;;
   esac
   chg_detect >/dev/null 2>&1
+  # 限流通道停充时 status 仍报 Charging（内核不承认自己停了），
+  # 按“控制器在停充 + 电流≈0”标成 stop，页面才好说人话
+  if [ "$dir" = "chg" ] && [ -f "$DATA/chg.on" ] && [ "$($BB cat "$DATA/chg.state" 2>/dev/null)" = "off" ]; then
+    m=${ma#-}
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    [ "$m" -lt 100 ] && dir=stop
+  fi
   sw="?"; [ -n "$CHG_NODE" ] && sw=$(cat "$CHG_NODE" 2>/dev/null)
   printf '{"cap":%s,"status":"%s","temp":%s,"ma":%s,"w":%s,"dir":"%s","pc":%s,"rc":%s,"enabled":%s,"sw":"%s","state":"%s","ch":"%s","node":"%s","plat":"%s","mt":%s}' \
     "$cap" "$st" "$temp" "$ma" "$watt" "$dir" "$PAUSE_CAP" "$RESUME_CAP" "$(chg_active)" "$sw" \

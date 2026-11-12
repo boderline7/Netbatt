@@ -1,6 +1,6 @@
 id=netbatt
 name=NetBatt - 热点随车自动化
-version=v5.0.5
-versionCode=505
+version=v5.0.7
+versionCode=507
 author=local
 description=点烟器取电，车通电自动开热点、熄火断电自动关；15 分钟无设备连接自动关闭，下次通电重新开启。三种模式：自动 / 常开 / 关闭。附带充电阈值控制（上限/恢复/过温）、无线 ADB、运行日志（3MB 滚动，网页可看可导出）。

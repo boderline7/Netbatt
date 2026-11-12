@@ -210,4 +210,5 @@ log_boot() {
   a=$(ap_iface 2>/dev/null)
   power_read
   log "当前: 热点 $(ap_running 2>/dev/null) ${a:+($a)} · 供电 $POWER · 设备 $(ap_clients 2>/dev/null)"
+  log "供电快照:$(power_snapshot 2>/dev/null)"
 }

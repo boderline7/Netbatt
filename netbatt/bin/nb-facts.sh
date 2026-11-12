@@ -41,25 +41,54 @@ ap_clients() {
 
 # ---------- 供电事实 ----------
 
-# 充电器物理存在 / 在线。present 只看插着没有，不受停充影响。
+# 充电器是否正在供电。
+# 只信 online：present 只表示接口/器件存在，高通平台上 usb/present、dc/present
+# 常常恒为 1，拿它当“有电”会导致没插线也开热点。present 仅在缺 online 时兜底。
 raw_power() {
   for n in usb ac dc wireless; do
     p=/sys/class/power_supply/$n
-    [ -f "$p/present" ] && [ "$(cat "$p/present" 2>/dev/null)" = "1" ] && return 0
-    [ -f "$p/online" ]  && [ "$(cat "$p/online" 2>/dev/null)" = "1" ] && return 0
+    if [ -f "$p/online" ]; then
+      [ "$(cat "$p/online" 2>/dev/null)" = "1" ] && return 0
+    elif [ -f "$p/present" ]; then
+      [ "$(cat "$p/present" 2>/dev/null)" = "1" ] && return 0
+    fi
   done
   return 1
 }
 
-# 电池正在进电。停充后这个信号会消失，所以只作兜底，且要避开 CHG_HELD。
+# 结论出自哪个节点，排查误判时看日志用
+power_source() {
+  for n in usb ac dc wireless; do
+    p=/sys/class/power_supply/$n
+    if [ -f "$p/online" ]; then
+      [ "$(cat "$p/online" 2>/dev/null)" = "1" ] && { echo "$n/online"; return 0; }
+    elif [ -f "$p/present" ]; then
+      [ "$(cat "$p/present" 2>/dev/null)" = "1" ] && { echo "$n/present"; return 0; }
+    fi
+  done
+  echo "-"
+}
+
+# 所有供电节点的一行快照，开机记一次，换设备排查时不用再连 adb
+power_snapshot() {
+  s=""
+  for d in /sys/class/power_supply/*; do
+    n=${d##*/}
+    for f in online present status; do
+      [ -f "$d/$f" ] && s="$s $n.$f=$(cat "$d/$f" 2>/dev/null)"
+    done
+  done
+  echo "$s"
+}
+
+# 电池正在进电。current_now 的符号方向各平台不一致（有的放电为正、有的为负），
+# 当判据会在骁龙上“没插线也判有电”，所以只看 status。
+# 停充后 status 会变成 Not charging，属于“线还插着”，由 CHG_HELD 分支处理。
 raw_charging() {
-  st=$(cat "$BATT/status" 2>/dev/null)
-  case "$st" in
+  case "$(cat "$BATT/status" 2>/dev/null)" in
     Charging|Full) return 0 ;;
   esac
-  c=$(cat "$BATT/current_now" 2>/dev/null)
-  case "$c" in ''|*[!0-9-]*) return 1 ;; esac
-  [ "$c" -gt 0 ]
+  return 1
 }
 
 # 软件主动停充中。只用来排除“自己停充导致的假断电”，不参与任何热点决策。
@@ -76,6 +105,13 @@ power_update() {
 
   raw=0
   raw_power && raw=1
+  # 自己停充会让 online 归零（高通 input_suspend），但线还插着。
+  # 区分方法：插着不充是 Not charging / Full，真拔线才是 Discharging。
+  if [ "$raw" = 0 ] && chg_held; then
+    case "$(cat "$BATT/status" 2>/dev/null)" in
+      Charging|Full|Not\ charging) raw=1 ;;
+    esac
+  fi
   if [ "$raw" = 0 ] && ! chg_held && raw_charging; then raw=1; fi
 
   POWER_DROPPED=0
@@ -101,6 +137,8 @@ power_update() {
   fi
   mv -f "$DATA/power.state.$$" "$DATA/power.state" 2>/dev/null
 
+  [ "$raw" != "$p_raw" ] && log "供电信号: raw=$raw 源=$(power_source)"
+
   POWER_RAW=$raw
   [ "$p_pow" = "1" ] && [ "$POWER" = "0" ] && POWER_DROPPED=1
   return 0
@@ -114,6 +152,11 @@ power_read() {
     POWER=$3
   else
     raw_power && POWER_RAW=1 || POWER_RAW=0
+    if [ "$POWER_RAW" = 0 ] && chg_held; then
+      case "$(cat "$BATT/status" 2>/dev/null)" in
+        Charging|Full|Not\ charging) POWER_RAW=1 ;;
+      esac
+    fi
     if [ "$POWER_RAW" = 0 ] && ! chg_held && raw_charging; then POWER_RAW=1; fi
     POWER=$POWER_RAW
   fi

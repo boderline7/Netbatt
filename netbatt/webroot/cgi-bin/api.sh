@@ -80,7 +80,9 @@ case "$a" in
     v=$(get on); [ "$v" = "1" ] || v=0
     if [ "$v" = "1" ]; then
       cfg_set LOG_ON 1; LOG_ON=1
-      log "日志记录: 开启"
+      log "日志记录: 开启（$(nb_ver)）"
+      power_read
+      log "供电快照: 供电 $POWER ·$(power_snapshot)"
     else
       log "日志记录: 关闭"
       cfg_set LOG_ON 0; LOG_ON=0

@@ -169,9 +169,11 @@ function render(){
   $('s-ap').textContent = ap ? '已开启' : '已关闭';
   $('s-ap').className = 'v ' + (ap?'ok':'off');
 
-  var car = S.power===1;
-  $('s-car').textContent = car ? '有电' : '断电';
-  $('s-car').className = 'v ' + (car?'ok':'off');
+  // 显示用原始信号，决策用确认值（有电 5s / 断电 120s 回滞）。
+  // 两者不一致时标「确认中」，否则拔线后两分钟还写着“有电”，看着像 bug。
+  var raw = S.power_raw===1, pow = S.power===1;
+  $('s-car').textContent = (raw ? '有电' : '断电') + (raw===pow ? '' : '（确认中）');
+  $('s-car').className = 'v ' + (raw?'ok':'off');
   $('s-cli').textContent = ap ? (S.clients||0)+' 台' : '—';
 
   // 模式

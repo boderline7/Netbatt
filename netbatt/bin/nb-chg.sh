@@ -39,13 +39,13 @@ chg_cache_load() {
   [ -f "$DATA/chg.node" ] || return 1
   . "$DATA/chg.node" 2>/dev/null
   # 旧缓存可能把能限流的机型记成了开关通道，主版本变了就重探一次
-  [ "$CHG_CACHE_V" = "2" ] || return 1
+  [ "$CHG_CACHE_V" = "3" ] || return 1
   [ -n "$CHG_NODE" ] && [ -e "$CHG_NODE" ]
 }
 
 chg_cache_save() {
   {
-    echo "CHG_CACHE_V=2"
+    echo "CHG_CACHE_V=3"
     echo "CHG_CH=$CHG_CH"
     echo "CHG_NODE=$CHG_NODE"
     echo "CHG_ON=$CHG_ON"
@@ -84,9 +84,9 @@ chg_detect() {
     fi
   else
     # 高通：优先限流通道。它不碰充电输入，充电器不会重新协商 PD，
-    # USB 也就不会跟着断开重连。个别机型写了 0 无效，会留 chg.fallback
+    # USB 也就不会跟着断开重连。个别机型写了 0 无效，会留 chg.fallback=2
     # 标记，之后直接用开关通道，不再反复试。
-    if [ ! -f "$DATA/chg.fallback" ] && chg_writable "$CHG_CUR"; then
+    if [ "$($BB cat "$DATA/chg.fallback" 2>/dev/null)" != "2" ] && chg_writable "$CHG_CUR"; then
       CHG_CH=current; CHG_NODE=$CHG_CUR; CHG_ON=0; CHG_OFF=0
       # 从旧的开关通道切过来时，input_suspend 可能还停在“暂停”。
       # 那不是现在的控制手段，必须放开，否则插上电也永远不充。
@@ -136,9 +136,40 @@ chg_platform() {
   esac
 }
 
+# 充电器在不在。不能只看 status：停充时它也可能还写着 Charging。
+# 这里看 power_supply 下的 online 节点，VBUS 在位就算插着。
+chg_plugged() {
+  for n in usb wireless dc ac; do
+    [ -e "$BATT/../$n/online" ] || continue
+    [ "$(cat "$BATT/../$n/online" 2>/dev/null)" = "1" ] && { echo 1; return 0; }
+  done
+  echo 0
+}
+
+# 把所有已知节点写回“允许充电”。切通道、恢复、自愈都走这里：
+# 任何一个残留（input_suspend=1 或 constant_charge_current=0）都会让机器
+# 插着电也不充，而且 status 还一直显示 Charging，只看状态根本发现不了。
+chg_restore_all() {
+  if [ -e "$CHG_SWITCH" ] && [ "$(cat "$CHG_SWITCH" 2>/dev/null)" != "0" ]; then
+    printf '0\n' > "$CHG_SWITCH" 2>/dev/null
+    log "充电: 放开开关节点 $CHG_SWITCH=0"
+  fi
+  [ -e "$CHG_CUR" ] || return 0
+  cur=$($BB cat "$CHG_CUR" 2>/dev/null)
+  [ "$cur" = "0" ] || return 0
+  o=$($BB cat "$DATA/ccc.orig" 2>/dev/null)
+  case "$o" in ''|0) o=$CHG_CUR_ON ;; esac
+  printf '%s\n' "$o" > "$CHG_CUR" 2>/dev/null
+  log "充电: 限流节点停在 0，已写回 ${o}µA"
+}
+
 # chg_apply on|off|restore —— 唯一碰硬件的地方
 chg_apply() {
   chg_detect || return 1
+
+  # 允许充电时先把所有已知节点写回一遍，清掉别的通道可能残留的“暂停”。
+  # 放在值比较之前，否则节点本来就是 0 时会提前返回，残留就永远清不掉。
+  [ "$1" != "off" ] && chg_restore_all
 
   if [ "$CHG_CH" = current ]; then
     if [ "$1" = "off" ]; then
@@ -169,13 +200,21 @@ chg_apply() {
 
   # 限流通道要确认真的停了：少数内核把 0 当成“无限制”或者干脆忽略。
   # 还在充就留标记改走开关通道，一次就够，不用每轮重试。
+  #
+  # 判定必须同时满足「还插着电」「status 仍说在充」「电流还是大」，缺一不可。
+  # v5.0.7 只比了电流绝对值：拔线后是 700~1000mA 的放电电流，同样超过阈值，
+  # 于是被当成“还在充”，误判限流失效切到开关通道；而 constant_charge_current
+  # 留在 0，开关通道再怎么放开也充不进电，表现为插着电一整天 0mA。
   if [ "$CHG_CH" = "current" ] && [ "$1" = "off" ]; then
     sleep 3
+    st=$($BB cat "$BATT/status" 2>/dev/null)
     c=$($BB cat "$BATT/current_now" 2>/dev/null); c=${c#-}
     case "$c" in ''|*[!0-9]*) c=0 ;; esac
-    if [ "$c" -gt 400000 ]; then
-      log "充电: 限流 0 无效（仍有 ${c}µA 在充），改用开关通道"
-      : > "$DATA/chg.fallback" 2>/dev/null
+    if [ "$st" = "Charging" ] && [ "$(chg_plugged)" = "1" ] && [ "$c" -gt 400000 ]; then
+      log "充电: 限流 0 无效（status=$st 仍 ${c}µA 在充），改用开关通道"
+      # 切通道前先把限流值写回去。否则 ccc 停在 0，换到开关通道也没用。
+      chg_restore_all
+      printf '2\n' > "$DATA/chg.fallback" 2>/dev/null
       rm -f "$DATA/chg.node" 2>/dev/null
       chg_detect >/dev/null 2>&1
       [ "$CHG_CH" = "switch" ] && chg_apply off
@@ -253,6 +292,28 @@ chg_once() {
     c=$($BB cat "$BATT/current_now" 2>/dev/null); c=${c#-}
     case "$c" in ''|*[!0-9]*) c=0 ;; esac
     [ "$c" -gt 300000 ] && chg_apply off >/dev/null 2>&1
+  fi
+
+  # 自愈：控制器允许充电、线插着、status 说在充，电流却一直是 0，
+  # 说明有别的通道残留（典型是 constant_charge_current 停在 0）。
+  # 持续 60 秒就把所有节点写回并记一行 fault，不靠人去发现。
+  if [ "$want" = "on" ] && [ "$(chg_plugged)" = "1" ] && [ "$(cat "$BATT/status" 2>/dev/null)" = "Charging" ]; then
+    c=$($BB cat "$BATT/current_now" 2>/dev/null); c=${c#-}
+    case "$c" in ''|*[!0-9]*) c=0 ;; esac
+    if [ "$c" -lt 50000 ]; then
+      t0=$($BB cat "$DATA/chg.zero.ts" 2>/dev/null)
+      if [ -z "$t0" ]; then
+        printf '%s\n' "$now" > "$DATA/chg.zero.ts" 2>/dev/null
+      elif [ $((now - t0)) -ge 60 ]; then
+        chg_restore_all
+        rm -f "$DATA/chg.zero.ts" 2>/dev/null
+        log "充电: 故障自愈（允许充电却 0mA 超过 60 秒），已写回所有节点"
+      fi
+    else
+      rm -f "$DATA/chg.zero.ts" 2>/dev/null
+    fi
+  else
+    rm -f "$DATA/chg.zero.ts" 2>/dev/null
   fi
   return 0
 }

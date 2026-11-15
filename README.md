@@ -130,10 +130,15 @@ v4 的 `nb-power.sh`（信号 + 决策 + 充电三合一）已拆成上面四个
 
 ## 安装
 
+到 [Releases](https://github.com/boderline7/Netbatt/releases/latest) 下载
+`NetBatt-vX.Y.Z.zip`，在 Magisk 里「从本地安装」选中它，重启即可。
+
+控制台：手机浏览器打开 `http://127.0.0.1:8080`，或从特权应用 NetBattConsole
+打开（走 `window.NetBatt` 桥，热点开关更直接）。热点开起来后，同网段设备的
+访问地址是热点接口的局域网 IP。
+
+自己改代码后重新打包：
+
 ```powershell
 python tools/pack.py      # 产出 NetBatt-vX.Y.Z.zip 到仓库根
 ```
-
-Magisk 里刷入 zip，重启。控制台：手机浏览器打开 `http://127.0.0.1:8080`，
-或从特权应用 NetBattConsole 打开（走 `window.NetBatt` 桥，热点开关更直接）。
-热点开起来后，同网段设备的访问地址是热点接口的局域网 IP。

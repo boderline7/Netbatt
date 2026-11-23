@@ -52,7 +52,7 @@ status_json() {
 "mode":"$(hs_mode)","force":$fo,"suppress":$(suppress_get),
 "power":${POWER:-0},"power_raw":${POWER_RAW:-0},
 "ap":$(ap_running),"ap_if":"$a","ap_ip":"$(ap_ip)","clients":$(ap_clients),
-"usb":$(usb_tether_on),"usb_if":"$(usb_iface 2>/dev/null)","
+"usb":$(usb_tether_on),"usb_if":"$(usb_iface 2>/dev/null)",
 "idle_min":$lim,"idle_left":$idle_left,
 "on_confirm":${ON_CONFIRM:-5},"off_confirm":${OFF_CONFIRM:-120},
 "batt":$(batt_json),

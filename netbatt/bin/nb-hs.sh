@@ -29,6 +29,34 @@ hs_cmd() {
   return 0
 }
 
+# USB 共享：纯手动按钮，不参与任何自动决策（不随车、不空转、不抑制）。
+# 走同一个特权应用（type 1 = TETHERING_USB），系统不会弹授权框。
+usb_cmd() {
+  case "$1" in
+    0) on=false ;;
+    *) on=true ;;
+  esac
+  log "执行: 请求 USB 共享 $1（手动）"
+  am broadcast -n com.netbatt.console/.TetherReceiver --ei type 1 --ez on "$on" >/dev/null 2>&1
+  if [ "$on" = true ]; then wait_for 5 usb_tether_up; else wait_for 5 usb_tether_down; fi
+  return 0
+}
+
+# 目标与实际相同就什么都不做；不同才发命令。
+usb_exec() {
+  want=${1:-0}
+  real=$(usb_tether_on)
+  [ "$want" = "$real" ] && return 0
+  usb_cmd "$want"
+  new=$(usb_tether_on)
+  if [ "$new" = "$want" ]; then
+    log "执行: USB 共享成功，实况 $new"
+  else
+    log "执行: USB 共享未生效，实况 $new"
+  fi
+  return 0
+}
+
 # 目标与实际相同就什么都不做；不同才发命令，并重新读一次实际状态。
 # 第二个参数传 force 时跳过冷却（手动操作），自动重试仍然受 30 秒限制。
 hs_exec() {

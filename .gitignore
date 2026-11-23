@@ -9,3 +9,4 @@ apk/build/*.idsig
 *.log
 *.tmp
 *.zip
+.bak/

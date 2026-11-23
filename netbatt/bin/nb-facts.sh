@@ -39,6 +39,24 @@ ap_clients() {
   echo "$n"
 }
 
+# ---------- USB 共享 ----------
+# 只认有 IPv4 地址的 gadget 接口：接口存在但没地址，说明只是插了线、没开共享。
+USB_IFACES="rndis0 ncm0 usb0"
+
+usb_iface() {
+  for i in $USB_IFACES; do
+    if ip -o -4 addr show dev "$i" 2>/dev/null | $BB grep -q 'inet '; then
+      echo "$i"; return 0
+    fi
+  done
+  return 1
+}
+
+# 给 nb-hs.sh 的 wait_for 用
+usb_tether_up() { usb_iface >/dev/null; }
+usb_tether_down() { usb_tether_up && return 1; return 0; }
+usb_tether_on() { usb_tether_up && echo 1 || echo 0; }
+
 # ---------- 供电事实 ----------
 
 # 充电器是否正在供电。

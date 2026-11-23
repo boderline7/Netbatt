@@ -38,3 +38,22 @@ else
   sh "$MODDIR/bin/nb-daemon.sh" adb-restore >/dev/null 2>&1 &
   sh "$MODDIR/bin/nb-daemon.sh" >/dev/null 2>&1 &
 fi
+
+# 部分 ROM 会对新装应用套「限制后台流量」策略（netd 里是 REJECT_RESTRICTED_MODE），
+# 连 127.0.0.1 都被拒 —— 表现是控制台白屏、按钮点了没反应，adb 里 ss 只能看到 SYN-SENT。
+# 应用重装会换 uid，名单里的旧条目就失效了，所以每次开机补一次。
+# 必须放在守护进程启动之后、并且放到后台：这条命令要跟 netd 打交道，
+# 开机瞬间可能慢，绝不能挡住守护和网页服务。
+(
+  . "$MODDIR/bin/nb-core.sh"
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if cmd netpolicy add restrict-background-whitelist com.netbatt.console >/dev/null 2>&1; then
+      log "网络策略: 控制台已加入不受限名单"
+      exit 0
+    fi
+    i=$((i + 1))
+    sleep 2
+  done
+  log "网络策略: 加入不受限名单失败，控制台可能白屏"
+) >/dev/null 2>&1 &

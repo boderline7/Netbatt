@@ -3,8 +3,9 @@
 一台常年放车里的 Android 手机（Magisk root），让它自己跟着车开关热点。
 
 v5 起只做四件事：热点随车自动化、空转保护、充电阈值、无线 ADB。
-原有的 USB 网络共享（自动共享 / 保留 ADB / 网段 / 端口转发 / DHCP 接管）已整体移除，
-原因见文末「为什么不做 USB 共享」。热点决策表见 [docs/热点决策表.md](docs/热点决策表.md)。
+另有一个纯手动的 USB 共享按钮，不参与任何自动逻辑。
+原来的 USB 网络共享（自动共享 / 保留 ADB / 网段 / 端口转发 / DHCP 接管）仍然不做。
+热点决策表见 [docs/热点决策表.md](docs/热点决策表.md)。
 
 热点部分按「采集 → 决策 → 执行」拆开，三层只通过事实和目标交流：
 
@@ -22,6 +23,7 @@ v5 起只做四件事：热点随车自动化、空转保护、充电阈值、�
 - **空转保护**：自动模式下热点开着但 15 分钟没有设备连上，自动关闭；下次通电重新开启。
 - **充电阈值**：上限 / 恢复 / 过温，硬件通道按平台自动识别。
 - **无线 ADB**：只写运行时属性，开机按上次状态恢复。
+- **USB 共享**：网页上一个手动开关，插数据线才生效，不随车、不空转。
 - **运行日志**：本地 3MB 滚动，网页可看、可导出到 `/sdcard/Download`。
 
 ## 取电与检测
@@ -92,6 +94,15 @@ v5 起只做四件事：热点随车自动化、空转保护、充电阈值、�
 
 老版本写进 persist 的 5555 不会随模块卸载消失，网页上留了「清除 persist 残留」按钮。
 
+## USB 共享
+
+网页上一个按钮，走的是和热点同一个入口：CGI → 广播 → 特权应用调
+`TetheringManager(TETHERING_USB)`。应用持 `TETHER_PRIVILEGED`，所以**不会弹授权框**，
+也不用去系统设置里手动点。
+
+只做手动开关：不跟车、不做空转保护、不会被 `auto` 模式覆盖。
+状态看 `rndis0` / `ncm0` / `usb0` 上有没有 IPv4 地址——接口在但没地址只说明插了线。
+
 ## 运行日志
 
 `/data/adb/netbatt/netbatt.log`，到 `LOG_MAX`（默认 3MB）滚成 `netbatt.log.1`，只留一份历史。
@@ -140,5 +151,31 @@ v4 的 `nb-power.sh`（信号 + 决策 + 充电三合一）已拆成上面四个
 自己改代码后重新打包：
 
 ```powershell
-python tools/pack.py      # 产出 NetBatt-vX.Y.Z.zip 到仓库根
+python tools/pack.py                    # 产出 NetBatt-vX.Y.Z.zip 到仓库根
+powershell apk/build-local.ps1          # 重编控制台 APK（产物在 apk/build/）
 ```
+
+改完 APK 要手动覆盖到 `netbatt/system/priv-app/NetBattConsole/NetBattConsole.apk` 再打包。
+
+## 控制台应用（NetBattConsole）
+
+- **权限**：全部是安装期授予，首次打开不会弹框。网络/无线状态是 normal 权限；
+  开热点走 `TETHER_PRIVILEGED`，由 `system/etc/permissions/privapp-permissions-netbatt.xml`
+  放行。应用没有声明任何危险权限，`POST_NOTIFICATIONS` 只在 Android 13+ 存在、
+  首次启动时由 `PermissionGate` 按需申请（Android 12 上直接跳过）。
+- **签名**：仓库存的是本机 `apk/nb.keystore`（已在 .gitignore）签的包，SHA-1
+  `a3f1b0b58218d03626f8555ec226ac907dbd5599`。换 key 后系统会在开机重扫时
+  重装一次（签名不一致），**以后都用这把 key**，备份在 `.bak/nb.keystore`。
+- **启动模式**：`singleTask`，反复从外部拉起不会叠实例；返回键无历史时直接退出。
+
+## 控制台白屏
+
+页面一片白、`ss -tn` 里只有到 `127.0.0.1:8080` 的 `SYN-SENT`，是 ROM 给这个应用套了
+「限制后台流量」策略（netd 里记作 `REJECT_RESTRICTED_MODE`），**连回环都会被拒**。
+`service.sh` 在 boot_completed 之后补一次允许名单，应用重装换 uid 也能自愈：
+
+```sh
+cmd netpolicy add restrict-background-whitelist com.netbatt.console
+```
+
+手动排查：`dumpsys netpolicy | grep UID=<应用 uid>`，正常应该显示 `policy=4 (ALLOW_METERED_BACKGROUND)`。

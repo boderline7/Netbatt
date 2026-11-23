@@ -41,6 +41,11 @@ case "$a" in
       echo '{"ok":0,"error":"mode_not_auto"}'
     fi
     ;;
+  usb)
+    v=$(get v); [ "$v" = "0" ] || v=1
+    usb_exec "$v"
+    echo "{\"ok\":1,\"usb\":$(usb_tether_on)}"
+    ;;
   batt)
     p=$(get pause); r=$(get resume)
     if set_batt "$p" "$r"; then echo '{"ok":1}'; else echo '{"ok":0,"error":"invalid"}'; fi

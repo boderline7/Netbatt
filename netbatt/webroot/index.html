@@ -94,6 +94,14 @@ footer{text-align:center;font-size:12px;color:var(--dim);padding-top:6px;word-br
 </section>
 
 <section class="card">
+  <h2>USB 共享</h2>
+  <div class="row">
+    <button class="grow" id="b-usb" onclick="toggleUsb()">USB 共享</button>
+  </div>
+  <div class="hint" id="h-usb"></div>
+</section>
+
+<section class="card">
   <h2>电量 / 充电阈值</h2>
   <div class="batt"><b id="b-cap">--</b><span class="u">%</span><span class="st" id="b-st"></span></div>
   <div class="row seg" style="margin-top:6px">
@@ -233,6 +241,15 @@ function render(){
   bl.className = S.log_on===1 ? 'on' : '';
   bl.textContent = S.log_on===1 ? '记录中' : '已暂停';
 
+  // USB 共享（纯手动，不参与自动逻辑）
+  var usbOn = S.usb===1;
+  var bu = $('b-usb');
+  bu.className = 'grow' + (usbOn ? ' on' : '');
+  bu.textContent = usbOn ? 'USB 共享 已开启' : 'USB 共享 已关闭';
+  $('h-usb').innerHTML = usbOn
+    ? ('接口 <b>' + (S.usb_if || 'rndis0') + '</b> · 手动开关，不随车、不空转')
+    : '手动开关，插数据线才生效；不参与自动逻辑。';
+
   $('foot').innerHTML = (S.url ? S.url+'<br>' : '') + '日志 '+ Math.round((S.log_size||0)/1024) +'KB';
 }
 
@@ -243,10 +260,19 @@ async function setMode(v){
 }
 async function setHs(on){
   if((S.mode||'auto')!=='auto'){ toast('先切到「自动」模式'); return; }
-  var b = bridge(); if(b){ try{ b.setHotspot(!!on); }catch(e){} }
+  var b = bridge(), msg = '';
+  if(b){ try{ msg = b.setHotspot(!!on) || ''; }catch(e){ msg = '桥调用异常：'+e; } }
   await api('hs',{v:on?1:0});
-  toast(on?'已请求开启热点':'已请求关闭热点');
+  toast(msg || (on?'已请求开启热点':'已请求关闭热点'));
   setTimeout(refresh,1600);
+}
+async function toggleUsb(){
+  var on = !(S.usb===1);
+  var b = bridge(), msg = '';
+  if(b && b.setUsb){ try{ msg = b.setUsb(on) || ''; }catch(e){ msg = '桥调用异常：'+e; } }
+  else { await api('usb',{v:on?1:0}); msg = on?'已请求开启 USB 共享':'已请求关闭 USB 共享'; }
+  toast(msg);
+  setTimeout(refresh,2000);
 }
 async function saveBatt(){
   var p=$('b-pc').value, r=$('b-rc').value;

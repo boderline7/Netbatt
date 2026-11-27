@@ -198,28 +198,10 @@ chg_apply() {
   printf '%s\n' "$v" > "$CHG_NODE" 2>/dev/null
   log "充电: 写入 $CHG_NODE=$v（$CHG_CH ${1}）"
 
-  # 限流通道要确认真的停了：少数内核把 0 当成“无限制”或者干脆忽略。
-  # 还在充就留标记改走开关通道，一次就够，不用每轮重试。
-  #
-  # 判定必须同时满足「还插着电」「status 仍说在充」「电流还是大」，缺一不可。
-  # v5.0.7 只比了电流绝对值：拔线后是 700~1000mA 的放电电流，同样超过阈值，
-  # 于是被当成“还在充”，误判限流失效切到开关通道；而 constant_charge_current
-  # 留在 0，开关通道再怎么放开也充不进电，表现为插着电一整天 0mA。
-  if [ "$CHG_CH" = "current" ] && [ "$1" = "off" ]; then
-    sleep 3
-    st=$($BB cat "$BATT/status" 2>/dev/null)
-    c=$($BB cat "$BATT/current_now" 2>/dev/null); c=${c#-}
-    case "$c" in ''|*[!0-9]*) c=0 ;; esac
-    if [ "$st" = "Charging" ] && [ "$(chg_plugged)" = "1" ] && [ "$c" -gt 400000 ]; then
-      log "充电: 限流 0 无效（status=$st 仍 ${c}µA 在充），改用开关通道"
-      # 切通道前先把限流值写回去。否则 ccc 停在 0，换到开关通道也没用。
-      chg_restore_all
-      printf '2\n' > "$DATA/chg.fallback" 2>/dev/null
-      rm -f "$DATA/chg.node" 2>/dev/null
-      chg_detect >/dev/null 2>&1
-      [ "$CHG_CH" = "switch" ] && chg_apply off
-    fi
-  fi
+  # 限流到底有没有生效，交给 chg_once 每轮判定（要连续多轮确认）。
+  # v5.0.13 及之前在这里单次采样就下结论：停充时 current_now 在 0 上下抖
+  # （实测出现 +476mA 的尖峰），一次超阈值就切 input_suspend —— 那是把充电输入
+  # 直接掐断，usb_online 变 0、手机插着线反而放电，用户看到的就是充电忽停忽开。
   return 0
 }
 
@@ -244,6 +226,13 @@ sample_once() {
     *) dir=闲 ;;
   esac
   ma=$($BB awk -v c="$cur" 'BEGIN{printf "%d", c/1000}')
+  # 与 batt_json 同一套判定：控制器在停充时限流通道的 status 仍写 Charging，
+  # 日志里再写「充 0.00W 0mA」会自相矛盾，标成「停」更贴近事实。
+  if [ "$dir" = "充" ] && [ -f "$DATA/chg.on" ] && [ "$($BB cat "$DATA/chg.state" 2>/dev/null)" = "off" ]; then
+    m=${ma#-}
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    [ "$m" -lt 800 ] && dir=停
+  fi
   sample_now "$cap" "$dir" "$watt" "$ma" "$t"
 }
 
@@ -288,10 +277,44 @@ chg_once() {
 
   # 限流通道兜底：系统温控可能把电流改回去，只有在真的又充起来时补写一次。
   # 这个写入不触碰充电输入，不会连带让 USB 断开，所以多写几次也无妨。
+  #
+  # 「限流到底有没有生效」也只在这里判，而且要连续多轮：
+  #   ① current_now 必须是正向（负值是放电，绝对值再大也不是在充电）
+  #   ② status 仍说 Charging、线还插着
+  #   ③ 电流 > 800mA（停充时的抖动实测到 ±480mA，阈值低了会误判）
+  # 只有连续 3 轮（约 30 秒）都满足才切开关通道 —— 切过去就是把充电输入掐断，
+  # 误判的代价是插着电反而掉电，宁可多等几轮。
   if [ "$want" = "off" ] && [ "$(chg_channel)" = "current" ]; then
-    c=$($BB cat "$BATT/current_now" 2>/dev/null); c=${c#-}
+    raw=$($BB cat "$BATT/current_now" 2>/dev/null)
+    c=${raw#-}
     case "$c" in ''|*[!0-9]*) c=0 ;; esac
-    [ "$c" -gt 300000 ] && chg_apply off >/dev/null 2>&1
+    st=$($BB cat "$BATT/status" 2>/dev/null)
+    case "$raw" in -*) neg=1 ;; *) neg=0 ;; esac
+
+    # ① 节点被改回去了就直接补写：重启、USB 重新协商、温控都会把
+    #    constant_charge_current 恢复成默认值（实测重启后变 5850000），
+    #    这时状态机因为「状态没变」不会动手，光靠 10 分钟兜底太迟钝。
+    node_v=$($BB cat "$CHG_NODE" 2>/dev/null)
+    [ "$node_v" != "0" ] && chg_apply off >/dev/null 2>&1
+
+    # ② 「限流到底有没有生效」要连续多轮才下结论
+    #    （① 正向电流 ② status 说在充 ③ 线还插着 ④ 超过 800mA）
+    if [ "$neg" = "0" ] && [ "$c" -gt 800000 ] && [ "$st" = "Charging" ] && [ "$(chg_plugged)" = "1" ]; then
+      n=$($BB cat "$DATA/chg.ineff.n" 2>/dev/null)
+      case "$n" in ''|*[!0-9]*) n=0 ;; esac
+      n=$((n + 1))
+      printf '%s\n' "$n" > "$DATA/chg.ineff.n" 2>/dev/null
+      if [ "$n" -ge 3 ]; then
+        log "充电: 限流连续 3 轮无效（仍 ${c}µA 在充），改用开关通道"
+        chg_restore_all
+        printf '2\n' > "$DATA/chg.fallback" 2>/dev/null
+        rm -f "$DATA/chg.node" "$DATA/chg.ineff.n" 2>/dev/null
+        chg_detect >/dev/null 2>&1
+        [ "$CHG_CH" = "switch" ] && chg_apply off
+      fi
+    else
+      rm -f "$DATA/chg.ineff.n" 2>/dev/null
+    fi
   fi
 
   # 自愈：控制器允许充电、线插着、status 说在充，电流却一直是 0，
@@ -381,11 +404,13 @@ batt_json() {
   esac
   chg_detect >/dev/null 2>&1
   # 限流通道停充时 status 仍报 Charging（内核不承认自己停了），
-  # 按“控制器在停充 + 电流≈0”标成 stop，页面才好说人话
+  # 按“控制器在停充 + 线还插着”标成 stop，页面才好说人话。
+  # 阈值不能卡太紧：停充后 current_now 在 0 上下抖（实测 -136~+249mA），
+  # 用 100mA 会让状态每个采样都翻一次，页面上就是「充电中/已停充」来回跳。
   if [ "$dir" = "chg" ] && [ -f "$DATA/chg.on" ] && [ "$($BB cat "$DATA/chg.state" 2>/dev/null)" = "off" ]; then
     m=${ma#-}
     case "$m" in ''|*[!0-9]*) m=0 ;; esac
-    [ "$m" -lt 100 ] && dir=stop
+    [ "$m" -lt 800 ] && [ "$(chg_plugged)" = "1" ] && dir=stop
   fi
   sw="?"; [ -n "$CHG_NODE" ] && sw=$(cat "$CHG_NODE" 2>/dev/null)
   printf '{"cap":%s,"status":"%s","temp":%s,"ma":%s,"w":%s,"dir":"%s","pc":%s,"rc":%s,"enabled":%s,"sw":"%s","state":"%s","ch":"%s","node":"%s","plat":"%s","mt":%s}' \

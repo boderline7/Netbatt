@@ -23,6 +23,11 @@ sleep 8
 
 chmod 755 "$MODDIR/bin"/*.sh 2>/dev/null
 
+# 重启后内核会把 constant_charge_current 之类节点恢复成默认值（实测变 5850000、
+# 也就是又开始充），而状态机按「状态没变化就不写」会一直不动，只能等 10 分钟兜底。
+# 清掉 last，让守护进程第一轮就把当前意图重新下发一遍。
+rm -f /data/adb/netbatt/chg.last
+
 # 旧版守护进程如果还活着（从 v3 升级上来），先收掉
 pkill -f "netbatt/bin/loop.sh" 2>/dev/null
 pkill -f "netbatt/bin/netbatt.sh" 2>/dev/null
@@ -46,14 +51,30 @@ fi
 # 开机瞬间可能慢，绝不能挡住守护和网页服务。
 (
   . "$MODDIR/bin/nb-core.sh"
+
+  # 这台 ROM 的 netpolicy 只认数字 UID，传包名会直接报
+  # "Error: UID (com.netbatt.console) should be a number"（v5.0.13 之前一直失败）。
+  # 三个来源依次兜底：数据目录属主 -> pm list -U -> dumpsys。
+  uid=$(stat -c %u /data/data/com.netbatt.console 2>/dev/null)
+  [ -n "$uid" ] || uid=$(pm list packages -U 2>/dev/null \
+      | sed -n 's/^package:com\.netbatt\.console uid:\([0-9]*\).*/\1/p' | head -1)
+  [ -n "$uid" ] || uid=$(dumpsys package com.netbatt.console 2>/dev/null \
+      | sed -n 's/.*userId=\([0-9]*\).*/\1/p' | head -1)
+
+  if [ -z "$uid" ]; then
+    log "网络策略: 取不到控制台 uid，跳过（控制台可能白屏）"
+    exit 0
+  fi
+
   i=0
+  err=""
   while [ "$i" -lt 30 ]; do
-    if cmd netpolicy add restrict-background-whitelist com.netbatt.console >/dev/null 2>&1; then
-      log "网络策略: 控制台已加入不受限名单"
+    if err=$(cmd netpolicy add restrict-background-whitelist "$uid" 2>&1); then
+      log "网络策略: 控制台 uid=$uid 已加入不受限名单"
       exit 0
     fi
     i=$((i + 1))
     sleep 2
   done
-  log "网络策略: 加入不受限名单失败，控制台可能白屏"
+  log "网络策略: uid=$uid 加入不受限名单失败（$err），控制台可能白屏"
 ) >/dev/null 2>&1 &
